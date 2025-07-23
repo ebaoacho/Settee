@@ -27,7 +27,7 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
 
   Future<void> fetchUsers() async {
     try {
-      final profileRes = await http.get(Uri.parse('http://10.0.2.2:8000/get-profile/${widget.userId}/'));
+      final profileRes = await http.get(Uri.parse('https://settee.jp/get-profile/${widget.userId}/'));
       if (profileRes.statusCode == 200) {
         final profile = json.decode(profileRes.body);
         setState(() {
@@ -35,8 +35,8 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
         });
       }
 
-      final res1 = await http.get(Uri.parse('http://10.0.2.2:8000/popular-users/${widget.userId}'));
-      final res2 = await http.get(Uri.parse('http://10.0.2.2:8000/recent-users/${widget.userId}'));
+      final res1 = await http.get(Uri.parse('https://settee.jp/popular-users/${widget.userId}'));
+      final res2 = await http.get(Uri.parse('https://settee.jp/recent-users/${widget.userId}'));
 
       if (res1.statusCode == 200 && res2.statusCode == 200) {
         setState(() {
@@ -239,7 +239,7 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
 
   Future<String?> _getExistingImageUrl(String userId, int index, List<String> extensions) async {
     for (final ext in extensions) {
-      final url = 'http://10.0.2.2:8000/images/$userId/${userId}_1.$ext';
+      final url = 'https://settee.jp/images/$userId/${userId}_1.$ext';
       try {
         final response = await http.head(Uri.parse(url));
         if (response.statusCode == 200) {

@@ -48,7 +48,7 @@ class UserProfileScreenState extends State<UserProfileScreen> {
   }
 
   Future<void> fetchUserProfile() async {
-    final response = await http.get(Uri.parse('http://10.0.2.2:8000/get-profile/${widget.userId}/'));
+    final response = await http.get(Uri.parse('https://settee.jp/get-profile/${widget.userId}/'));
     if (response.statusCode == 200) {
       final data = json.decode(response.body);
       setState(() {
@@ -67,7 +67,7 @@ class UserProfileScreenState extends State<UserProfileScreen> {
   }
 
   Future<void> updateUserProfile() async {
-    final uri = Uri.parse('http://10.0.2.2:8000/update-profile/${widget.userId}/');
+    final uri = Uri.parse('https://settee.jp/update-profile/${widget.userId}/');
 
     final updatedData = {
       for (final entry in _fields.entries) entry.key: entry.value.text.trim(),
@@ -294,7 +294,7 @@ class UserProfileScreenState extends State<UserProfileScreen> {
 
   Future<String?> _getExistingImageUrl(String userId, int index, List<String> extensions) async {
     for (final ext in extensions) {
-      final url = 'http://10.0.2.2:8000/images/$userId/${userId}_$index.$ext';
+      final url = 'https://settee.jp/images/$userId/${userId}_$index.$ext';
       try {
         final response = await http.head(Uri.parse(url));
         if (response.statusCode == 200) {

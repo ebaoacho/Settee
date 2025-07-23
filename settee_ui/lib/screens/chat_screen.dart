@@ -34,7 +34,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> fetchMessages() async {
     try {
       final response = await http.get(Uri.parse(
-        'http://10.0.2.2:8000/messages/${widget.currentUserId}/${widget.matchedUserId}/',
+        'https://settee.jp/messages/${widget.currentUserId}/${widget.matchedUserId}/',
       ));
       if (response.statusCode == 200) {
         setState(() {
@@ -49,7 +49,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> sendMessage(String text) async {
     try {
       final response = await http.post(
-        Uri.parse('http://10.0.2.2:8000/messages/send/'),
+        Uri.parse('https://settee.jp/messages/send/'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
           'sender': widget.currentUserId,

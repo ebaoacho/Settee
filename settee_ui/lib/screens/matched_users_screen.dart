@@ -26,7 +26,7 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
   }
 
   Future<void> fetchMatchedUsers() async {
-    final url = Uri.parse('http://10.0.2.2:8000/matched-users/${widget.userId}/');
+    final url = Uri.parse('https://settee.jp/matched-users/${widget.userId}/');
 
     try {
       final response = await http.get(url);
