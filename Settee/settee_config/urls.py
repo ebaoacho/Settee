@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import path
-from settee_app.views import register_user, login_user, upload_user_image, recommended_users, like_user, get_user_profile, popular_users, recent_users, matched_users, send_message, get_messages, get_available_dates,  update_available_dates, get_selected_areas, update_selected_areas, update_match_multiple, update_user_profile
+from settee_app.views import register_user, login_user, upload_user_image, recommended_users, like_user, get_user_profile, popular_users, recent_users, matched_users, send_message, get_messages, get_available_dates,  update_available_dates, get_selected_areas, update_selected_areas, update_match_multiple, update_user_profile, health_check, serve_image
 from django.conf import settings
 from django.conf.urls.static import static
 
@@ -22,6 +22,8 @@ urlpatterns = [
     path('user-profile/<str:user_id>/update-areas/', update_selected_areas, name='update_selected_areas'),
     path('user-profile/<str:user_id>/update-match-multiple/', update_match_multiple, name='update_match_multiple'),
     path('update-profile/<str:user_id>/', update_user_profile, name='update_user_profile'),
+    path('health/', health_check, name='health_check'),
+    path('images/<str:user_id>/<str:filename>', serve_image, name='serve_image'),
 ]
 
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

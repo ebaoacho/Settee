@@ -18,5 +18,8 @@ COPY . .
 COPY wait-for-it.sh /wait-for-it.sh
 RUN chmod +x /wait-for-it.sh
 
-# ポートを開放
+# ポートを開放（ALB で使用）
 EXPOSE 8000
+
+# Gunicorn を使用して Django WSGI を起動
+CMD ["/wait-for-it.sh", "db:5432", "--", "gunicorn", "settee_config.wsgi:application", "--bind", "0.0.0.0:8000"]

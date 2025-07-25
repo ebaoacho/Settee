@@ -29,13 +29,12 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = ['settee.jp', 'localhost']
 
-# CORS_ALLOWED_ORIGINS = [
-#     "http://localhost:5555",
-#     "http://127.0.0.1:5555",
-# ]
-CORS_ALLOW_ALL_ORIGINS = True 
+CORS_ALLOWED_ORIGINS = [
+    "https://settee.jp",
+    "http://localhost:8000",
+]
 
 CORS_ALLOW_HEADERS = [
     "content-type",
