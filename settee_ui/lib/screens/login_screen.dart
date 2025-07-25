@@ -29,7 +29,7 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     setState(() => _isLoading = true);
-    final url = Uri.parse('http://10.0.2.2:8000/login/');
+    final url = Uri.parse('https://settee.jp/login/');
 
     try {
       final response = await http.post(

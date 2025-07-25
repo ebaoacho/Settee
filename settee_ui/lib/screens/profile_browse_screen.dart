@@ -52,7 +52,7 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
   }
 
   void _fetchCurrentUserMatchMode() async {
-    final url = Uri.parse('http://10.0.2.2:8000/user-profile/${widget.currentUserId}/');
+    final url = Uri.parse('https://settee.jp/user-profile/${widget.currentUserId}/');
     final response = await http.get(url);
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
@@ -86,7 +86,7 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
 
     final offset = profiles.length;
     final url = Uri.parse(
-        'http://10.0.2.2:8000/recommended-users/${widget.currentUserId}/?offset=$offset&limit=2');
+        'https://settee.jp/recommended-users/${widget.currentUserId}/?offset=$offset&limit=2');
     final response = await http.get(url);
 
     if (response.statusCode == 200) {
@@ -114,7 +114,7 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
 
     for (int i = 1; i <= maxIndex; i++) {
       for (var ext in extensions) {
-        final url = 'http://10.0.2.2:8000/images/${userId}/${userId}_${i}.${ext}';
+        final url = 'https://settee.jp/images/${userId}/${userId}_${i}.${ext}';
         final response = await http.head(Uri.parse(url));
         if (response.statusCode == 200) {
           userImageUrls[userId]![i] = url;
@@ -189,7 +189,7 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
   }
 
   Future<void> _sendLike(String receiverId, int likeType) async {
-    final url = Uri.parse('http://10.0.2.2:8000/like/');
+    final url = Uri.parse('https://settee.jp/like/');
     final body = jsonEncode({
       'sender': widget.currentUserId,
       'receiver': receiverId,
@@ -208,7 +208,7 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
 
   Future<void> _fetchAvailableDates() async {
     final url = Uri.parse(
-        'http://10.0.2.2:8000/user-profile/${widget.currentUserId}/');
+        'https://settee.jp/user-profile/${widget.currentUserId}/');
     final response = await http.get(url);
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
@@ -321,7 +321,7 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
 
   Future<void> _updateAvailableDates() async {
     final url = Uri.parse(
-        'http://10.0.2.2:8000/user-profile/${widget.currentUserId}/update-available-dates/');
+        'https://settee.jp/user-profile/${widget.currentUserId}/update-available-dates/');
     final body = jsonEncode({
       'available_dates': availableDates
           .map((d) => d.toIso8601String().split('T')[0])
@@ -413,7 +413,7 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
   }
 
   void _updateMatchMultiple(String userId, bool value) async {
-    final url = Uri.parse('http://10.0.2.2:8000/user-profile/$userId/update-match-multiple/');
+    final url = Uri.parse('https://settee.jp/user-profile/$userId/update-match-multiple/');
     final response = await http.post(
       url,
       headers: {'Content-Type': 'application/json'},

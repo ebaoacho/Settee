@@ -31,7 +31,7 @@ class _AreaSelectionScreenState extends State<AreaSelectionScreen> {
   }
 
   Future<void> _fetchSelectedAreas() async {
-    final url = Uri.parse('http://10.0.2.2:8000/user-profile/${widget.userId}/areas/');
+    final url = Uri.parse('https://settee.jp/user-profile/${widget.userId}/areas/');
     final response = await http.get(url);
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
@@ -42,7 +42,7 @@ class _AreaSelectionScreenState extends State<AreaSelectionScreen> {
   }
 
   Future<void> _submitSelectedAreas() async {
-    final url = Uri.parse('http://10.0.2.2:8000/user-profile/${widget.userId}/update-areas/');
+    final url = Uri.parse('https://settee.jp/user-profile/${widget.userId}/update-areas/');
     final body = jsonEncode({'selected_area': selectedAreas});
     await http.post(url, headers: {'Content-Type': 'application/json'}, body: body);
     Navigator.pop(context);

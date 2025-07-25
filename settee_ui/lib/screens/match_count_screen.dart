@@ -40,7 +40,7 @@ class _MatchCountScreenState extends State<MatchCountScreen> {
   bool isLoading = false;
 
   Future<void> _uploadImage(File imageFile, String userId) async {
-    final url = Uri.parse('http://10.0.2.2:8000/upload-image/');
+    final url = Uri.parse('https://settee.jp/upload-image/');
     final mimeType = lookupMimeType(imageFile.path) ?? 'image/jpeg';
 
     final request = http.MultipartRequest('POST', url)
@@ -66,7 +66,7 @@ class _MatchCountScreenState extends State<MatchCountScreen> {
     setState(() => isLoading = true);
 
     try {
-      final url = Uri.parse('http://10.0.2.2:8000/register/');
+      final url = Uri.parse('https://settee.jp/register/');
       final payload = {
         "phone": widget.phone,
         "email": widget.email,
