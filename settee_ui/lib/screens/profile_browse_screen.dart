@@ -115,7 +115,7 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
     for (int i = 1; i <= maxIndex; i++) {
       for (var ext in extensions) {
         final url = 'https://settee.jp/images/${userId}/${userId}_${i}.${ext}';
-        final response = await http.head(Uri.parse(url));
+        final response = await http.get(Uri.parse(url));
         if (response.statusCode == 200) {
           userImageUrls[userId]![i] = url;
           precacheImage(NetworkImage(url), context);
@@ -160,10 +160,13 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          Image.network(
-            imageUrls.values.elementAt(imageIndexes[userId]!),
-            fit: BoxFit.cover,
-          ),
+        Image.network(
+          imageUrls.values.elementAt(imageIndexes[userId]!),
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) {
+            return const Center(child: Text('画像を読み込めません'));
+          },
+        ),
           Positioned(
             bottom: 80,
             left: 0,
