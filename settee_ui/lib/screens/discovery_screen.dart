@@ -241,7 +241,7 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
     for (final ext in extensions) {
       final url = 'https://settee.jp/images/$userId/${userId}_1.$ext';
       try {
-        final response = await http.head(Uri.parse(url));
+        final response = await http.get(Uri.parse(url));
         if (response.statusCode == 200) {
           return url;
         }
