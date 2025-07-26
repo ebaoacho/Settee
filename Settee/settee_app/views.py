@@ -4,6 +4,7 @@ from django.contrib.auth.hashers import make_password, check_password
 from django.shortcuts import get_object_or_404
 from django.db import IntegrityError
 from django.db.models import Count, Q
+from django.http import JsonResponse, FileResponse, Http404
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
@@ -399,3 +400,16 @@ def update_user_profile(request, user_id):
         print("=== バリデーションエラー ===")
         print(serializer.errors)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET'])
+def health_check(request):
+    return JsonResponse({'status': 'ok'}, status=200)
+
+@api_view(['GET'])
+def serve_image(request, user_id, filename):
+    # 任意の画像保存ディレクトリ（MEDIA_ROOT または固定パス）
+    image_path = os.path.join(settings.MEDIA_ROOT, user_id, filename)
+    if not os.path.exists(image_path):
+        raise Http404("画像が存在しません")
+    
+    return FileResponse(open(image_path, 'rb'))
