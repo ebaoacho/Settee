@@ -826,106 +826,69 @@ def start_double_match(request):
 @api_view(['POST'])
 def invite_to_conversation(request):
     """
-    POST /double-match/invite/
     body: {"conversation_id":123, "inviter":"u_me", "invitee":"u_friend"}
-
-    制約:
-      - DoubleMatch の会話にのみ招待可能
-      - 4名まで（在籍中メンバー数で判定）
-      - 退室済みメンバーは left_at を None にして復活
-      - 既に在籍中なら冪等に 200 を返す
     """
+    cid = request.data.get('conversation_id')
+    inviter_id = (request.data.get('inviter') or '').strip()
+    invitee_id = (request.data.get('invitee') or '').strip()
+    if not cid or not inviter_id or not invitee_id:
+        return Response({'error': 'MISSING_PARAMS'}, status=400)
+
     try:
-      # ---- 入力検証
-      cid_raw    = request.data.get('conversation_id')
-      inviter_id = (request.data.get('inviter') or '').strip()
-      invitee_id = (request.data.get('invitee') or '').strip()
+        cid = int(cid)
+    except (TypeError, ValueError):
+        return Response({'error': 'INVALID_CONVERSATION_ID'}, status=400)
 
-      if not cid_raw or not inviter_id or not invitee_id:
-          return Response({'error': 'MISSING_PARAMS'}, status=status.HTTP_400_BAD_REQUEST)
+    # ユーザ解決は例外をきちんと 404 返す
+    try:
+        inviter = UserProfile.objects.get(user_id=inviter_id)
+        invitee = UserProfile.objects.get(user_id=invitee_id)
+    except UserProfile.DoesNotExist:
+        return Response({'error': 'USER_NOT_FOUND'}, status=404)
 
-      try:
-          cid = int(cid_raw)
-      except (TypeError, ValueError):
-          return Response({'error': 'BAD_CONVERSATION_ID'}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        # ★ ここからトランザクション内で select_for_update を使う
+        with transaction.atomic():
+            conv = Conversation.objects.select_for_update().get(id=cid)
 
-      if inviter_id == invitee_id:
-          # 自分自身の招待は無意味なので 400
-          return Response({'error': 'INVITE_SELF_FORBIDDEN'}, status=status.HTTP_400_BAD_REQUEST)
+            # Double 以外はエラー（仕様に合わせて）
+            if conv.kind != ConversationKind.DOUBLE:
+                return Response({'error': 'WRONG_KIND'}, status=400)
 
-      # ---- ユーザ解決
-      try:
-          inviter = UserProfile.objects.get(user_id=inviter_id)
-          invitee = UserProfile.objects.get(user_id=invitee_id)
-      except UserProfile.DoesNotExist:
-          return Response({'error': 'USER_NOT_FOUND'}, status=status.HTTP_404_NOT_FOUND)
+            # 招待操作権限の検証（有効メンバーのみ）
+            is_member = ConversationMember.objects.filter(
+                conversation=conv, user=inviter, left_at__isnull=True
+            ).exists()
+            if not is_member:
+                return Response({'error': 'FORBIDDEN'}, status=403)
 
-      # ---- クリティカルセクション
-      with transaction.atomic():
-          conv = Conversation.objects.select_for_update().filter(id=cid).first()
-          if not conv:
-              return Response({'error': 'CONV_NOT_FOUND'}, status=status.HTTP_404_NOT_FOUND)
+            # 既に入っていれば冪等に 200 を返す（left_at があれば復帰）
+            cm, created = ConversationMember.objects.get_or_create(
+                conversation=conv, user=invitee, defaults={'role': 'member'}
+            )
+            if not created and cm.left_at is not None:
+                cm.left_at = None
+                cm.save(update_fields=['left_at'])
 
-          # kind が 'double' か ConversationKind.DOUBLE のいずれかを許可
-          double_values = {'double'}
-          if hasattr(ConversationKind, 'DOUBLE'):
-              double_values.add(ConversationKind.DOUBLE)
-          if getattr(conv, 'kind', None) not in double_values:
-              return Response({'error': 'WRONG_KIND', 'kind': conv.kind}, status=status.HTTP_400_BAD_REQUEST)
+            # 上限（4人想定）チェックは「追加後」に再カウントして超過ならエラー返す
+            active_count = ConversationMember.objects.filter(
+                conversation=conv, left_at__isnull=True
+            ).count()
+            if active_count > 4:
+                return Response({'error': 'MEMBER_LIMIT_REACHED'}, status=409)
 
-          # 招待者が在籍中か
-          if not ConversationMember.objects.filter(
-              conversation=conv, user=inviter, left_at__isnull=True
-          ).exists():
-              return Response({'error': 'FORBIDDEN'}, status=status.HTTP_403_FORBIDDEN)
+            members = list(ConversationMember.objects
+                .filter(conversation=conv, left_at__isnull=True)
+                .values_list('user__user_id', flat=True))
 
-          # 既に在籍中なら冪等に成功扱い
-          active_invitee = ConversationMember.objects.filter(
-              conversation=conv, user=invitee, left_at__isnull=True
-          ).first()
-          if active_invitee:
-              members = list(
-                  conv.members.select_related('user')
-                  .filter(left_at__isnull=True)
-                  .values_list('user__user_id', flat=True)
-              )
-              return Response({'id': conv.id, 'kind': conv.kind, 'members': members}, status=status.HTTP_200_OK)
+        return Response({'id': conv.id, 'kind': conv.kind, 'members': members}, status=200)
 
-          # 退室済みなら復活、いなければ新規作成
-          cm = ConversationMember.objects.filter(conversation=conv, user=invitee).first()
-          if cm and cm.left_at is not None:
-              # 復活は上限カウントに含まれるため、復活前に上限チェック
-              active_count = ConversationMember.objects.filter(
-                  conversation=conv, left_at__isnull=True
-              ).count()
-              if active_count >= 4:
-                  return Response({'error': 'MEMBER_LIMIT_REACHED', 'limit': 4}, status=status.HTTP_409_CONFLICT)
-              cm.left_at = None
-              cm.save(update_fields=['left_at'])
-          else:
-              # 新規参加は上限チェックの対象
-              active_count = ConversationMember.objects.filter(
-                  conversation=conv, left_at__isnull=True
-              ).count()
-              if active_count >= 4:
-                  return Response({'error': 'MEMBER_LIMIT_REACHED', 'limit': 4}, status=status.HTTP_409_CONFLICT)
-              ConversationMember.objects.create(
-                  conversation=conv, user=invitee, role='member'
-              )
-
-          members = list(
-              conv.members.select_related('user')
-              .filter(left_at__isnull=True)
-              .values_list('user__user_id', flat=True)
-          )
-
-      # ---- 正常応答
-      return Response({'id': conv.id, 'kind': conv.kind, 'members': members}, status=status.HTTP_200_OK)
-
+    except Conversation.DoesNotExist:
+        return Response({'error': 'CONV_NOT_FOUND'}, status=404)
     except Exception as e:
-      logger.exception('invite_to_conversation failed')
-      # 例外は必ず JSON で返す（HTML 500 を出さない）
-      return Response({'error': 'SERVER_ERROR', 'detail': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        # 本番では stacktrace をログに出す（Sentry 等）
+        # logger.exception('invite_to_conversation failed')
+        return Response({'error': 'SERVER_ERROR'}, status=500)
 
 # ------------- 新規: 会話一覧（ユーザ別） -------------
 @api_view(['GET'])

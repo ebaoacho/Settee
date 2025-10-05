@@ -51,7 +51,7 @@ class _MatchBannerState extends State<MatchBanner> {
   late MatchUser? _partnerInvitee;
   bool _inviting = false;
 
-  // DoubleMatch の相対座標とサイズ
+  // DoubleMatch の相対座標とサイズ（画像基準 0.0〜1.0）
   static const _doublePositions = <String, Offset>{
     // 左上=相手、右上=相手が招待、左下=自分、右下=自分が招待
     'partner'       : Offset(0.27, 0.28),
@@ -61,14 +61,12 @@ class _MatchBannerState extends State<MatchBanner> {
   };
   static const _doubleAvatarDiameterFrac = 0.30;
 
-  // SingleMatch の相対座標とサイズ
+  // SingleMatch（招待なし）
   static const _singlePositions = <String, Offset>{
-    // 左=自分、右=相手、右上=相手が招待、右下=自分が招待
-    'self'          : Offset(0.30, 0.58),
-    'partner'       : Offset(0.70, 0.58),
+    'self'    : Offset(0.30, 0.58),
+    'partner' : Offset(0.70, 0.58),
   };
-  static const _singleAvatarDiameterFracMain   = 0.30;
-  static const _singleAvatarDiameterFracInvite = 0.20;
+  static const _singleAvatarDiameterFracMain = 0.30;
 
   @override
   void initState() {
@@ -82,11 +80,15 @@ class _MatchBannerState extends State<MatchBanner> {
     final asset = widget.mode == MatchMode.double
         ? 'assets/DoubleMatch.png'
         : 'assets/SingleMatch.png';
-    final img = await rootBundle.load(asset);
-    final codec = await ui.instantiateImageCodec(img.buffer.asUint8List());
-    final fi = await codec.getNextFrame();
-    if (!mounted) return;
-    setState(() => _bgAspect = fi.image.width / fi.image.height);
+    try {
+      final img = await rootBundle.load(asset);
+      final codec = await ui.instantiateImageCodec(img.buffer.asUint8List());
+      final fi = await codec.getNextFrame();
+      if (!mounted) return;
+      setState(() => _bgAspect = fi.image.width / fi.image.height);
+    } catch (_) {
+      if (mounted) setState(() => _bgAspect = 9 / 16); // フォールバック
+    }
   }
 
   Future<void> _openInviteDialog() async {
@@ -136,31 +138,27 @@ class _MatchBannerState extends State<MatchBanner> {
         ? 'assets/DoubleMatch.png'
         : 'assets/SingleMatch.png';
 
-    return LayoutBuilder(builder: (context, c) {
-      final ratio = _bgAspect ?? (9 / 16);
-      final w = c.maxWidth;         // 横幅は常に最大
-      final h = w / ratio;          // 比率から高さを算出（左右に白が出ない）
+    // 親（スリバー）から横幅いっぱいで置かれることを想定。
+    // 横幅=最大、 高さ=幅/比率 で厳密に作る → 横に余白は絶対出ない。
+    return LayoutBuilder(
+      builder: (context, c) {
+        final ratio = _bgAspect ?? (9 / 16);
+        final w = c.maxWidth;      // 横幅は最大
+        final h = w / ratio;       // アスペクト比から高さを確定
 
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ColoredBox(
-            color: Colors.white,
-            child: SizedBox(
-              width: w,
-              height: h,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Image.asset(bgAsset, fit: BoxFit.fitWidth, alignment: Alignment.center),
-                  _buildOverlay(), // 相対配置オーバーレイ
-                ],
-              ),
-            ),
+        return SizedBox(
+          width: w,
+          height: h,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Image.asset(bgAsset, fit: BoxFit.fitWidth, alignment: Alignment.center),
+              _buildOverlay(),
+            ],
           ),
-        ],
-      );
-    });
+        );
+      },
+    );
   }
 
   Widget _buildOverlay() {
@@ -177,9 +175,6 @@ class _MatchBannerState extends State<MatchBanner> {
         return _SingleOverlay(
           self: widget.self,
           partner: widget.partner,
-          myInvitee: _myInvitee,
-          partnerInvitee: _partnerInvitee,
-          onInviteTap: _openInviteDialog,
         );
     }
   }
@@ -211,7 +206,7 @@ class _AvatarCircle extends StatelessWidget {
         boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4))],
       ),
       clipBehavior: Clip.antiAlias,
-      child: (url == null || url!.isEmpty)
+      child: (url == null || url!.isNotEmpty == false)
           ? _placeholder()
           : Image.network(
               url!,
@@ -391,23 +386,15 @@ class _DoubleOverlay extends StatelessWidget {
 
 class _SingleOverlay extends StatelessWidget {
   final MatchUser self, partner;
-  final MatchUser? myInvitee, partnerInvitee;
-  final VoidCallback? onInviteTap;
-
   const _SingleOverlay({
     required this.self,
     required this.partner,
-    required this.myInvitee,
-    required this.partnerInvitee,
-    required this.onInviteTap,
   });
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (ctx, c) {
-      final dMain   = c.maxWidth * _MatchBannerState._singleAvatarDiameterFracMain;
-      final dInvite = c.maxWidth * _MatchBannerState._singleAvatarDiameterFracInvite;
-
+      final dMain = c.maxWidth * _MatchBannerState._singleAvatarDiameterFracMain;
       return Stack(children: [
         _at(_AvatarCircle(url: self.avatarUrl, size: dMain), _MatchBannerState._singlePositions['self']!),
         _at(_AvatarCircle(url: partner.avatarUrl, size: dMain), _MatchBannerState._singlePositions['partner']!),
@@ -420,14 +407,14 @@ class _SingleOverlay extends StatelessWidget {
       );
 }
 
-// ================== ChatScreen（上に MatchBanner を差し込み） ==================
+// ================== ChatScreen（スリバー化でオーバーフロー回避） ==================
 
 class ChatScreen extends StatefulWidget {
   final String currentUserId;
   final String matchedUserId;
   final String matchedUserNickname;
 
-  // 追加：会話ID（あれば招待ボタンを表示し、招待APIを叩く）
+  // 追加：会話ID（あれば招待APIを叩く）
   final int? conversationId;
 
   // 追加：ヘッダの表示モード（既定は single）
@@ -447,8 +434,6 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  static const List<String> _avatarExts = ['jpg','jpeg','png','heic','heif','JPG','JPEG','PNG','HEIC','HEIF'];
-
   List<dynamic> messages = [];
   final TextEditingController _controller = TextEditingController();
 
@@ -462,9 +447,8 @@ class _ChatScreenState extends State<ChatScreen> {
     fetchMessages();
   }
 
-  // ---- 1枚目アバターURLを“できるだけ確実に”返す（HEAD→GET Range フォールバック）
+  // ---- 1枚目アバターURLを“できるだけ確実に”返す（HEAD→GET Range）
   Future<String?> _resolveFirstAvatarUrl(String userId) async {
-    // index=1…9, 拡張子優先順
     final preferred = ['jpg','jpeg','png','JPG','JPEG','PNG'];
     final others    = ['heic','heif','HEIC','HEIF'];
 
@@ -478,22 +462,26 @@ class _ChatScreenState extends State<ChatScreen> {
             final get = await http.get(uri, headers: {'Range': 'bytes=0-0'}).timeout(const Duration(seconds: 6));
             if (get.statusCode == 200 || get.statusCode == 206) return uri.toString();
           }
-        } catch (_) { /* 次の候補へ */ }
+        } catch (_) {/* 次の候補へ */}
       }
     }
     return null;
   }
 
   Future<void> _loadAvatars() async {
-    final meF    = _resolveFirstAvatarUrl(widget.currentUserId);
-    final otherF = _resolveFirstAvatarUrl(widget.matchedUserId);
-    final meUrl    = await meF;
-    final otherUrl = await otherF;
-    if (!mounted) return;
-    setState(() {
-      _selfAvatarUrl    = meUrl;
-      _partnerAvatarUrl = otherUrl;
-    });
+    try {
+      final meF    = _resolveFirstAvatarUrl(widget.currentUserId);
+      final otherF = _resolveFirstAvatarUrl(widget.matchedUserId);
+      final meUrl    = await meF;
+      final otherUrl = await otherF;
+      if (!mounted) return;
+      setState(() {
+        _selfAvatarUrl    = meUrl;
+        _partnerAvatarUrl = otherUrl;
+      });
+    } catch (e) {
+      debugPrint('avatar load error: $e');
+    }
   }
 
   Future<void> fetchMessages() async {
@@ -529,52 +517,51 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  // ---- 招待（バックエンドのURLはあなたの実装に合わせて調整）
-Future<bool> _inviteToConversation(String inviteeUserId) async {
-  final cid = widget.conversationId;
-  if (cid == null) {
-    debugPrint('[invite] no conversationId');
-    return false;
-  }
-  final uri = Uri.parse('https://settee.jp/double-match/invite/'); // ★ サーバと一致
-  final bodyMap = {
-    'conversation_id': cid,
-    'inviter': widget.currentUserId.trim(),
-    'invitee': inviteeUserId.trim(),
-  };
-  try {
-    final body = jsonEncode(bodyMap);
-    debugPrint('[invite] POST $uri body=$body');
-    final res = await http
-        .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
-        .timeout(const Duration(seconds: 10));
-    debugPrint('[invite] status=${res.statusCode} body=${res.body}');
-    if (res.statusCode == 200) return true;
-
-    // サーバの error メッセージをそのまま表示
-    String msg = '招待に失敗しました (${res.statusCode})';
+  // ---- 招待（/double-match/invite/ に合わせ済み）
+  Future<bool> _inviteToConversation(String inviteeUserId) async {
+    final cid = widget.conversationId;
+    if (cid == null) {
+      debugPrint('[invite] no conversationId');
+      return false;
+    }
+    final uri = Uri.parse('https://settee.jp/double-match/invite/');
+    final bodyMap = {
+      'conversation_id': cid,
+      'inviter': widget.currentUserId.trim(),
+      'invitee': inviteeUserId.trim(),
+    };
     try {
-      final m = jsonDecode(res.body);
-      if (m is Map && m['error'] is String) msg = m['error'];
-    } catch (_) {}
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      final body = jsonEncode(bodyMap);
+      debugPrint('[invite] POST $uri body=$body');
+      final res = await http
+          .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
+          .timeout(const Duration(seconds: 10));
+      debugPrint('[invite] status=${res.statusCode} body=${res.body}');
+      if (res.statusCode == 200) return true;
+
+      String msg = '招待に失敗しました (${res.statusCode})';
+      try {
+        final m = jsonDecode(res.body);
+        if (m is Map && m['error'] is String) msg = m['error'];
+      } catch (_) {}
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
+      return false;
+    } catch (e) {
+      debugPrint('[invite] error=$e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('ネットワークエラーで招待に失敗しました')),
+        );
+      }
+      return false;
     }
-    return false;
-  } catch (e) {
-    debugPrint('[invite] error=$e');
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('ネットワークエラーで招待に失敗しました')),
-      );
-    }
-    return false;
   }
-}
 
   @override
   Widget build(BuildContext context) {
-    final self    = MatchUser(
+    final self = MatchUser(
       userId: widget.currentUserId,
       avatarUrl: _selfAvatarUrl,
       displayName: 'あなた',
@@ -585,6 +572,7 @@ Future<bool> _inviteToConversation(String inviteeUserId) async {
       displayName: widget.matchedUserNickname,
     );
 
+    // 本文はスクロール全体で管理（ヘッダー＋メッセージ一覧）。
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -594,55 +582,66 @@ Future<bool> _inviteToConversation(String inviteeUserId) async {
       ),
       body: Column(
         children: [
-          // ★ 上部にマッチ画像＋相対アバター/プレースホルダー
-          MatchBanner(
-            mode: widget.headerMode,
-            self: self,
-            partner: partner,
-            myInvitee: null,            // 必要ならサーバから取得して渡す
-            partnerInvitee: null,       // 必要ならサーバから取得して渡す
-            onInvite: (widget.conversationId != null) ? _inviteToConversation : null,
-          ),
-
-          // ↓ メッセージリスト
+          // スクロール領域：ヘッダー（幅Max/比率厳守）+ メッセージ（リスト）
           Expanded(
-            child: ListView.builder(
-              reverse: true,
-              padding: const EdgeInsets.all(12),
-              itemCount: messages.length,
-              itemBuilder: (context, index) {
-                final message = messages[messages.length - 1 - index];
-                final isMe = message['sender'].toString() == widget.currentUserId;
-
-                return Align(
-                  alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Container(
-                    constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.7),
-                    margin: const EdgeInsets.symmetric(vertical: 4),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: isMe ? Colors.blueAccent : Colors.grey[300],
-                      borderRadius: BorderRadius.only(
-                        topLeft: const Radius.circular(12),
-                        topRight: const Radius.circular(12),
-                        bottomLeft: isMe ? const Radius.circular(12) : const Radius.circular(0),
-                        bottomRight: isMe ? const Radius.circular(0) : const Radius.circular(12),
-                      ),
-                    ),
-                    child: Text(
-                      message['text'],
-                      style: TextStyle(
-                        color: isMe ? Colors.white : Colors.black,
-                        fontSize: 15,
-                      ),
-                    ),
+            child: CustomScrollView(
+              slivers: [
+                // ヘッダー：横幅いっぱい・高さ=幅/比率（→ 横余白ゼロ）
+                SliverToBoxAdapter(
+                  child: MatchBanner(
+                    mode: widget.headerMode,
+                    self: self,
+                    partner: partner,
+                    myInvitee: null,            // 必要ならサーバから取得
+                    partnerInvitee: null,       // 必要ならサーバから取得
+                    onInvite: (widget.headerMode == MatchMode.double && widget.conversationId != null)
+                        ? _inviteToConversation
+                        : null,
                   ),
-                );
-              },
+                ),
+
+                // メッセージ一覧（下に向かって古→新の順。上にスクロールで過去を見る一般的なUI）
+                SliverPadding(
+                  padding: const EdgeInsets.all(12),
+                  sliver: SliverList.separated(
+                    itemCount: messages.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      final message = messages[index]; // 先頭=古い
+                      final isMe = message['sender'].toString() == widget.currentUserId;
+
+                      return Align(
+                        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                        child: Container(
+                          constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.7),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: isMe ? Colors.blueAccent : Colors.grey[300],
+                            borderRadius: BorderRadius.only(
+                              topLeft: const Radius.circular(12),
+                              topRight: const Radius.circular(12),
+                              bottomLeft: isMe ? const Radius.circular(12) : const Radius.circular(0),
+                              bottomRight: isMe ? const Radius.circular(0) : const Radius.circular(12),
+                            ),
+                          ),
+                          child: Text(
+                            message['text'] ?? '',
+                            style: TextStyle(
+                              color: isMe ? Colors.white : Colors.black,
+                              fontSize: 15,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SliverToBoxAdapter(child: SizedBox(height: 8)),
+              ],
             ),
           ),
 
-          // 入力欄
+          // 入力欄（スクロール外に固定）
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             color: Colors.grey[900],
