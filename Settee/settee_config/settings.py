@@ -29,7 +29,28 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
+SIMPLE_TOKEN_SALT = 'admin.simpletoken.v1'  # 任意の識別子。変えると既存トークンは全失効
+SIMPLE_TOKEN_TTL_SECONDS = 900              # 例: 15分
+
 ALLOWED_HOSTS = ['settee.jp', 'localhost']
+
+ALLOWED_HOSTS_FILE = os.getenv("DJANGO_ALLOWED_HOSTS_FILE", "/run/hostenv/allowed_hosts")
+
+def _load_hosts_file(path):
+    try:
+        with open(path, "r") as f:
+            lines = [ln.strip() for ln in f.readlines()]
+        # 空行・コメント行を除外
+        hosts = [h for h in lines if h and not h.startswith("#")]
+        return hosts
+    except FileNotFoundError:
+        return []
+    except Exception:
+        # 失敗しても起動は継続（必要なら logging.warning などを追加）
+        return []
+
+# ファイル由来のホストを上乗せ
+ALLOWED_HOSTS += _load_hosts_file(ALLOWED_HOSTS_FILE)
 
 CORS_ALLOWED_ORIGINS = [
     "https://settee.jp",

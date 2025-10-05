@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'signup_method_screen.dart';
+import 'consent_screen.dart';
 import 'login_method_screen.dart';
+import 'details_screen.dart';
 
 class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({super.key});
@@ -27,7 +28,7 @@ class WelcomeScreen extends StatelessWidget {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => const SignUpMethodScreen(),
+                    builder: (context) => const ConsentScreen(),
                   ),
                 );
               },
@@ -50,8 +51,23 @@ class WelcomeScreen extends StatelessWidget {
               ),
             ),
             const Spacer(),
-            const Text('利用規約 と プライバシーポリシー',
-                style: TextStyle(fontSize: 12)),
+            // 利用規約とプライバシーポリシーへの遷移リンク
+            const SizedBox(height: 10),
+            GestureDetector(
+              onTap: () {
+                // 詳細画面へ遷移
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const DetailsScreen(),
+                  ),
+                );
+              },
+              child: const Text(
+                '利用規約とプライバシーポリシーを見る',
+                style: TextStyle(color: Colors.blue),
+              ),
+            ),
             const SizedBox(height: 20),
           ],
         ),

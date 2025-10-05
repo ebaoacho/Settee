@@ -3,7 +3,14 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'welcome_screen.dart';
 import 'profile_browse_screen.dart';
+import 'admin_screen.dart';
 
+/// スプラッシュ：
+/// - 少なくとも2秒表示
+/// - SharedPreferences から user_id を読み出し
+/// - user_id が 'settee-admin' の場合は、保存済みの管理トークンが有効かも確認
+///   - 有効: AdminScreen
+///   - 無効: ProfileBrowseScreen（通常画面にフォールバック）
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
@@ -15,37 +22,80 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    _checkLoginStatus();
+    // 初回フレーム描画後に遷移ロジック開始（Inherited参照の競合を避ける）
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkLoginStatus();
+    });
   }
 
   Future<void> _checkLoginStatus() async {
-    final prefs = await SharedPreferences.getInstance();
-    final storedUserId = prefs.getString('user_id');
+    try {
+      // 2秒待機 & Prefs取得（Prefsは最大3秒待ち）
+      final delay = Future.delayed(const Duration(seconds: 2));
+      final prefs = await SharedPreferences.getInstance()
+          .timeout(const Duration(seconds: 3));
+      final storedUserId = prefs.getString('user_id');
 
-    // 2秒間スプラッシュ画面を表示
-    await Future.delayed(const Duration(seconds: 2));
+      await delay; // 少なくとも2秒は表示
 
-    if (storedUserId != null) {
-      // 自動ログイン成功 → プロフィール閲覧画面へ
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => ProfileBrowseScreen(currentUserId: storedUserId),
-        ),
-      );
-    } else {
-      // 通常ログイン画面へ
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const WelcomeScreen()),
-      );
+      if (!mounted) return;
+
+      // 遷移先判定
+      Widget next;
+
+      if (storedUserId != null && storedUserId.isNotEmpty) {
+        if (storedUserId == 'settee-admin' && _hasValidAdminToken(prefs)) {
+          // 管理者ID かつ 短命トークンがまだ有効
+          next = AdminScreen(currentUserId: storedUserId);
+        } else {
+          // 一般 or 管理トークン失効時は通常画面へ
+          next = ProfileBrowseScreen(currentUserId: storedUserId);
+        }
+      } else {
+        // 未ログイン
+        next = const WelcomeScreen();
+      }
+
+      _goNext(next);
+    } on TimeoutException {
+      // Prefs 取得が遅い環境でも起動を止めない
+      if (!mounted) return;
+      _goNext(const WelcomeScreen());
+    } catch (_) {
+      // 何か起きても安全側へ
+      if (!mounted) return;
+      _goNext(const WelcomeScreen());
     }
+  }
+
+  /// 保存済みの管理トークンが有効か判定
+  /// - 'admin_access' にトークン本文
+  /// - 'admin_exp' に有効期限(ミリ秒SinceEpoch)
+  bool _hasValidAdminToken(SharedPreferences prefs) {
+    final tok = prefs.getString('admin_access');
+    final expMs = prefs.getInt('admin_exp') ?? 0;
+    if (tok == null || tok.isEmpty) return false;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    return expMs > nowMs;
+  }
+
+  void _goNext(Widget next) {
+    // microtask 経由で安全に遷移
+    Future.microtask(() {
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => next),
+      );
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return const Scaffold(
+      backgroundColor: Colors.black,
       body: Center(
-        child: Image.asset(
-          'assets/logo.png',
+        child: Image(
+          image: AssetImage('assets/logo.png'),
           width: 200,
           height: 200,
         ),

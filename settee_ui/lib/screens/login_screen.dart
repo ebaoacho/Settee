@@ -1,9 +1,8 @@
-// lib/screens/login_screen.dart
-
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'profile_browse_screen.dart';
+import 'admin_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -32,6 +31,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final url = Uri.parse('https://settee.jp/login/');
 
     try {
+      // 1) 通常ログイン
       final response = await http.post(
         url,
         headers: {'Content-Type': 'application/json'},
@@ -41,30 +41,67 @@ class _LoginScreenState extends State<LoginScreen> {
         }),
       );
 
-      if (!mounted) return;  // await 後の最初の mounted チェック
+      if (!mounted) return; // await 後の最初の mounted チェック
 
       if (response.statusCode == 200) {
         final bodyString = utf8.decode(response.bodyBytes);
         final data = jsonDecode(bodyString) as Map<String, dynamic>;
 
-        // SharedPreferences に保存
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('user_id', data['user_id'] as String);
+        final userId = data['user_id'] as String;
 
+        // 2) 端末に通常の user_id を保存
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('user_id', userId);
+
+        // 成功トースト
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(data['message']?.toString() ?? 'ログインに成功しました')),
         );
 
+        // 3) 管理者なら、ログイン直後に“サイレント昇格”（短命トークン取得）
+        String? adminToken;
+        int? adminExpMs;
+        if (userId == 'settee-admin') {
+          try {
+            final adminRes = await http.post(
+              Uri.parse('https://settee.jp/admin/simple-token/'),
+              headers: {'Content-Type': 'application/json'},
+              // サーバ側は Django 認証ユーザ（auth_user）の username/password を検証
+              body: jsonEncode({'username': userId, 'password': passwordInput}),
+            );
+
+            if (adminRes.statusCode == 200) {
+              final m = jsonDecode(utf8.decode(adminRes.bodyBytes)) as Map<String, dynamic>;
+              adminToken = (m['access'] as String?)?.trim();
+              final ttlSec = (m['expires_in'] as num?)?.toInt() ?? 900;
+              adminExpMs = DateTime.now().millisecondsSinceEpoch + ttlSec * 1000;
+
+              if (adminToken != null && adminToken!.isNotEmpty) {
+                await prefs.setString('admin_access', adminToken!);
+                await prefs.setInt('admin_exp', adminExpMs);
+              }
+            } else {
+              // 失敗しても通常ログイン自体は成功なので、デバッグ出力のみに留める
+              debugPrint('admin token issue failed: ${adminRes.statusCode} ${adminRes.body}');
+            }
+          } catch (e) {
+            debugPrint('admin token error: $e');
+          }
+        }
+
         if (!mounted) return;
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => ProfileBrowseScreen(
-              currentUserId: data['user_id'] as String,
-              showTutorial: false,
-            ),
-          ),
-        );
+
+        // 4) 管理トークンが有効なら Admin、なければ通常画面へ
+        final savedTok = (await SharedPreferences.getInstance()).getString('admin_access');
+        final savedExp = (await SharedPreferences.getInstance()).getInt('admin_exp') ?? 0;
+        final hasAdminToken =
+            (userId == 'settee-admin') && savedTok != null && savedTok.isNotEmpty && savedExp > DateTime.now().millisecondsSinceEpoch;
+
+        final Widget next = hasAdminToken
+            ? AdminScreen(currentUserId: userId)
+            : ProfileBrowseScreen(currentUserId: userId, showTutorial: false);
+
+        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => next));
       } else {
         final err = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -72,13 +109,11 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       }
     } catch (e) {
-      if (!mounted) return;  // 例外後の mounted チェック
+      if (!mounted) return; // 例外後の mounted チェック
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('通信エラーが発生しました: $e')),
       );
     } finally {
-      // finally ブロック内では return を使わず、
-      // マウントされていれば isLoading を解除するだけにします
       if (mounted) {
         setState(() => _isLoading = false);
       }

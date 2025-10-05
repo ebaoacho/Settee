@@ -1,20 +1,445 @@
-import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:http/http.dart' as http;
+
 import 'profile_browse_screen.dart';
 import 'discovery_screen.dart';
 import 'user_profile_screen.dart';
+
+// ================== 共有定義（Match表示） ==================
+
+enum MatchMode { single, double }
+
+class MatchUser {
+  final String userId;
+  final String? avatarUrl;
+  final String? displayName;
+  const MatchUser({required this.userId, this.avatarUrl, this.displayName});
+}
+
+// ================== Matchバナー（チャット上部） ==================
+
+class MatchBanner extends StatefulWidget {
+  final MatchMode mode;
+  final MatchUser self;
+  final MatchUser partner;
+  final MatchUser? myInvitee;
+  final MatchUser? partnerInvitee;
+  final Future<bool> Function(String inviteeUserId)? onInvite; // nullなら招待UIは出さない
+
+  const MatchBanner({
+    super.key,
+    required this.mode,
+    required this.self,
+    required this.partner,
+    this.myInvitee,
+    this.partnerInvitee,
+    this.onInvite,
+  });
+
+  @override
+  State<MatchBanner> createState() => _MatchBannerState();
+}
+
+class _MatchBannerState extends State<MatchBanner> {
+  double? _bgAspect; // 背景画像の width/height
+  late MatchUser? _myInvitee;
+  late MatchUser? _partnerInvitee;
+  bool _inviting = false;
+
+  // DoubleMatch の相対座標とサイズ
+  static const _doublePositions = <String, Offset>{
+    // 左上=相手、右上=相手が招待、左下=自分、右下=自分が招待
+    'partner'       : Offset(0.27, 0.28),
+    'partnerFriend' : Offset(0.71, 0.28),
+    'self'          : Offset(0.26, 0.83),
+    'myFriend'      : Offset(0.71, 0.83),
+  };
+  static const _doubleAvatarDiameterFrac = 0.30;
+
+  // SingleMatch の相対座標とサイズ
+  static const _singlePositions = <String, Offset>{
+    // 左=自分、右=相手、右上=相手が招待、右下=自分が招待
+    'self'          : Offset(0.30, 0.58),
+    'partner'       : Offset(0.70, 0.58),
+  };
+  static const _singleAvatarDiameterFracMain   = 0.30;
+  static const _singleAvatarDiameterFracInvite = 0.20;
+
+  @override
+  void initState() {
+    super.initState();
+    _myInvitee = widget.myInvitee;
+    _partnerInvitee = widget.partnerInvitee;
+    _loadAspect();
+  }
+
+  Future<void> _loadAspect() async {
+    final asset = widget.mode == MatchMode.double
+        ? 'assets/DoubleMatch.png'
+        : 'assets/SingleMatch.png';
+    final img = await rootBundle.load(asset);
+    final codec = await ui.instantiateImageCodec(img.buffer.asUint8List());
+    final fi = await codec.getNextFrame();
+    if (!mounted) return;
+    setState(() => _bgAspect = fi.image.width / fi.image.height);
+  }
+
+  Future<void> _openInviteDialog() async {
+    if (widget.onInvite == null) return;
+    final controller = TextEditingController();
+    final inviteeId = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF101010),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text('友だちを招待', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+        content: TextField(
+          controller: controller,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            hintText: 'ユーザーIDを入力',
+            hintStyle: TextStyle(color: Colors.white54),
+            enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+            focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white70)),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('キャンセル')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, controller.text.trim()), child: const Text('招待する')),
+        ],
+      ),
+    );
+    if (inviteeId == null || inviteeId.isEmpty) return;
+
+    setState(() => _inviting = true);
+    final ok = await widget.onInvite!(inviteeId).catchError((_) => false);
+    if (!mounted) return;
+    setState(() => _inviting = false);
+
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('招待に失敗しました')));
+      return;
+    }
+    setState(() {
+      _myInvitee = MatchUser(userId: inviteeId, avatarUrl: null, displayName: 'Friend');
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bgAsset = widget.mode == MatchMode.double
+        ? 'assets/DoubleMatch.png'
+        : 'assets/SingleMatch.png';
+
+    return LayoutBuilder(builder: (context, c) {
+      final ratio = _bgAspect ?? (9 / 16);
+      final w = c.maxWidth;         // 横幅は常に最大
+      final h = w / ratio;          // 比率から高さを算出（左右に白が出ない）
+
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ColoredBox(
+            color: Colors.white,
+            child: SizedBox(
+              width: w,
+              height: h,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.asset(bgAsset, fit: BoxFit.fitWidth, alignment: Alignment.center),
+                  _buildOverlay(), // 相対配置オーバーレイ
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
+    });
+  }
+
+  Widget _buildOverlay() {
+    switch (widget.mode) {
+      case MatchMode.double:
+        return _DoubleOverlay(
+          self: widget.self,
+          partner: widget.partner,
+          myInvitee: _myInvitee,
+          partnerInvitee: _partnerInvitee,
+          onInviteTap: _openInviteDialog,
+        );
+      case MatchMode.single:
+        return _SingleOverlay(
+          self: widget.self,
+          partner: widget.partner,
+          myInvitee: _myInvitee,
+          partnerInvitee: _partnerInvitee,
+          onInviteTap: _openInviteDialog,
+        );
+    }
+  }
+}
+
+// ========== 丸アバター & プレースホルダー（相対配置用） ==========
+
+class _AvatarCircle extends StatelessWidget {
+  final String? url;
+  final double size;
+  const _AvatarCircle({required this.url, required this.size});
+
+  Widget _placeholder() => Container(
+        width: size,
+        height: size,
+        alignment: Alignment.center,
+        decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF444444)),
+        child: const Icon(Icons.person, color: Colors.white70),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: size * 0.03),
+        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4))],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: (url == null || url!.isEmpty)
+          ? _placeholder()
+          : Image.network(
+              url!,
+              width: size,
+              height: size,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => _placeholder(),
+            ),
+    );
+  }
+}
+
+class _InvitePlaceholder extends StatelessWidget {
+  final String message;
+  final double size;
+  final bool showPlus;
+  final VoidCallback? onPlus;
+
+  const _InvitePlaceholder({
+    required this.message,
+    required this.size,
+    required this.showPlus,
+    this.onPlus,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final plusSize = size * 0.28;
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // 本体（灰丸）
+          Container(
+            width: size,
+            height: size,
+            decoration: const BoxDecoration(
+              color: Color(0xFF7B7B7B),
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Padding(
+              padding: EdgeInsets.all(size * 0.12),
+              child: Text(
+                message,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w800,
+                  height: 1.15,
+                  fontSize: size * 0.12, // 相対フォント
+                ),
+              ),
+            ),
+          ),
+          // 白の点線枠
+          Positioned.fill(
+            child: CustomPaint(
+              painter: _DottedCirclePainter(
+                color: Colors.white,
+                dotCount: 48,
+                strokeWidth: size * 0.016,
+              ),
+            ),
+          ),
+          // 右下の＋ボタン
+          if (showPlus)
+            Positioned(
+              right: -plusSize * 0.15,
+              bottom: -plusSize * 0.10,
+              child: GestureDetector(
+                onTap: onPlus,
+                child: Container(
+                  width: plusSize,
+                  height: plusSize,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE6E6E6),
+                    shape: BoxShape.circle,
+                    boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 3))],
+                  ),
+                  child: const Icon(Icons.add, color: Colors.black87),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DottedCirclePainter extends CustomPainter {
+  final Color color;
+  final int dotCount;
+  final double strokeWidth;
+  const _DottedCirclePainter({required this.color, required this.dotCount, required this.strokeWidth});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final r = size.width / 2;
+    final center = Offset(r, r);
+    final paint = Paint()..color = color..style = PaintingStyle.fill;
+    final dotR = strokeWidth; // ドット半径
+    for (int i = 0; i < dotCount; i++) {
+      final t = (i / dotCount) * 2 * math.pi;
+      final p = center + Offset(math.cos(t), math.sin(t)) * (r - dotR * 0.8);
+      canvas.drawCircle(p, dotR, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DottedCirclePainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.dotCount != dotCount || oldDelegate.strokeWidth != strokeWidth;
+}
+
+// ========== Double / Single のオーバーレイ実装 ==========
+
+class _DoubleOverlay extends StatelessWidget {
+  final MatchUser self, partner;
+  final MatchUser? myInvitee, partnerInvitee;
+  final VoidCallback? onInviteTap;
+
+  const _DoubleOverlay({
+    required this.self,
+    required this.partner,
+    required this.myInvitee,
+    required this.partnerInvitee,
+    required this.onInviteTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (ctx, c) {
+      final d = c.maxWidth * _MatchBannerState._doubleAvatarDiameterFrac;
+
+      return Stack(children: [
+        // 固定アバター
+        _at(_AvatarCircle(url: self.avatarUrl, size: d), _MatchBannerState._doublePositions['self']!),
+        _at(_AvatarCircle(url: partner.avatarUrl, size: d), _MatchBannerState._doublePositions['partner']!),
+
+        // 相手側の招待スロット：未招待なら「○○さんの素敵な友だちを待とう」
+        if (partnerInvitee != null)
+          _at(_AvatarCircle(url: partnerInvitee!.avatarUrl, size: d), _MatchBannerState._doublePositions['partnerFriend']!)
+        else
+          _at(
+            _InvitePlaceholder(
+              message: '${partner.displayName ?? "相手"}さんの素敵な\n友だちを待とう',
+              size: d,
+              showPlus: false,
+            ),
+            _MatchBannerState._doublePositions['partnerFriend']!,
+          ),
+
+        // 自分側の招待スロット：未招待なら「あなたの友だちを招待しよう」＋ボタン
+        if (myInvitee != null)
+          _at(_AvatarCircle(url: myInvitee!.avatarUrl, size: d), _MatchBannerState._doublePositions['myFriend']!)
+        else
+          _at(
+            _InvitePlaceholder(
+              message: 'あなたの友だちを\n招待しよう',
+              size: d,
+              showPlus: true,
+              onPlus: onInviteTap,
+            ),
+            _MatchBannerState._doublePositions['myFriend']!,
+          ),
+      ]);
+    });
+  }
+
+  Widget _at(Widget child, Offset frac) => Positioned.fill(
+        child: Align(alignment: Alignment(-1 + 2 * frac.dx, -1 + 2 * frac.dy), child: child),
+      );
+}
+
+class _SingleOverlay extends StatelessWidget {
+  final MatchUser self, partner;
+  final MatchUser? myInvitee, partnerInvitee;
+  final VoidCallback? onInviteTap;
+
+  const _SingleOverlay({
+    required this.self,
+    required this.partner,
+    required this.myInvitee,
+    required this.partnerInvitee,
+    required this.onInviteTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (ctx, c) {
+      final dMain   = c.maxWidth * _MatchBannerState._singleAvatarDiameterFracMain;
+      final dInvite = c.maxWidth * _MatchBannerState._singleAvatarDiameterFracInvite;
+
+      return Stack(children: [
+        _at(_AvatarCircle(url: self.avatarUrl, size: dMain), _MatchBannerState._singlePositions['self']!),
+        _at(_AvatarCircle(url: partner.avatarUrl, size: dMain), _MatchBannerState._singlePositions['partner']!),
+      ]);
+    });
+  }
+
+  Widget _at(Widget child, Offset frac) => Positioned.fill(
+        child: Align(alignment: Alignment(-1 + 2 * frac.dx, -1 + 2 * frac.dy), child: child),
+      );
+}
+
+// ================== ChatScreen（上に MatchBanner を差し込み） ==================
 
 class ChatScreen extends StatefulWidget {
   final String currentUserId;
   final String matchedUserId;
   final String matchedUserNickname;
 
+  // 追加：会話ID（あれば招待ボタンを表示し、招待APIを叩く）
+  final int? conversationId;
+
+  // 追加：ヘッダの表示モード（既定は single）
+  final MatchMode headerMode;
+
   const ChatScreen({
     super.key,
     required this.currentUserId,
     required this.matchedUserId,
     required this.matchedUserNickname,
+    this.conversationId,
+    this.headerMode = MatchMode.single,
   });
 
   @override
@@ -22,13 +447,53 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  static const List<String> _avatarExts = ['jpg','jpeg','png','heic','heif','JPG','JPEG','PNG','HEIC','HEIF'];
+
   List<dynamic> messages = [];
   final TextEditingController _controller = TextEditingController();
+
+  String? _selfAvatarUrl;
+  String? _partnerAvatarUrl;
 
   @override
   void initState() {
     super.initState();
+    _loadAvatars();
     fetchMessages();
+  }
+
+  // ---- 1枚目アバターURLを“できるだけ確実に”返す（HEAD→GET Range フォールバック）
+  Future<String?> _resolveFirstAvatarUrl(String userId) async {
+    // index=1…9, 拡張子優先順
+    final preferred = ['jpg','jpeg','png','JPG','JPEG','PNG'];
+    final others    = ['heic','heif','HEIC','HEIF'];
+
+    for (var i = 1; i <= 9; i++) {
+      for (final ext in [...preferred, ...others]) {
+        final uri = Uri.parse('https://settee.jp/images/$userId/${userId}_$i.$ext');
+        try {
+          final head = await http.head(uri).timeout(const Duration(seconds: 4));
+          if (head.statusCode == 200) return uri.toString();
+          if (head.statusCode == 405 || head.statusCode == 403) {
+            final get = await http.get(uri, headers: {'Range': 'bytes=0-0'}).timeout(const Duration(seconds: 6));
+            if (get.statusCode == 200 || get.statusCode == 206) return uri.toString();
+          }
+        } catch (_) { /* 次の候補へ */ }
+      }
+    }
+    return null;
+  }
+
+  Future<void> _loadAvatars() async {
+    final meF    = _resolveFirstAvatarUrl(widget.currentUserId);
+    final otherF = _resolveFirstAvatarUrl(widget.matchedUserId);
+    final meUrl    = await meF;
+    final otherUrl = await otherF;
+    if (!mounted) return;
+    setState(() {
+      _selfAvatarUrl    = meUrl;
+      _partnerAvatarUrl = otherUrl;
+    });
   }
 
   Future<void> fetchMessages() async {
@@ -37,9 +502,7 @@ class _ChatScreenState extends State<ChatScreen> {
         'https://settee.jp/messages/${widget.currentUserId}/${widget.matchedUserId}/',
       ));
       if (response.statusCode == 200) {
-        setState(() {
-          messages = json.decode(response.body);
-        });
+        setState(() => messages = json.decode(response.body));
       }
     } catch (e) {
       debugPrint('メッセージ取得エラー: $e');
@@ -66,8 +529,62 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  // ---- 招待（バックエンドのURLはあなたの実装に合わせて調整）
+Future<bool> _inviteToConversation(String inviteeUserId) async {
+  final cid = widget.conversationId;
+  if (cid == null) {
+    debugPrint('[invite] no conversationId');
+    return false;
+  }
+  final uri = Uri.parse('https://settee.jp/double-match/invite/'); // ★ サーバと一致
+  final bodyMap = {
+    'conversation_id': cid,
+    'inviter': widget.currentUserId.trim(),
+    'invitee': inviteeUserId.trim(),
+  };
+  try {
+    final body = jsonEncode(bodyMap);
+    debugPrint('[invite] POST $uri body=$body');
+    final res = await http
+        .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
+        .timeout(const Duration(seconds: 10));
+    debugPrint('[invite] status=${res.statusCode} body=${res.body}');
+    if (res.statusCode == 200) return true;
+
+    // サーバの error メッセージをそのまま表示
+    String msg = '招待に失敗しました (${res.statusCode})';
+    try {
+      final m = jsonDecode(res.body);
+      if (m is Map && m['error'] is String) msg = m['error'];
+    } catch (_) {}
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    }
+    return false;
+  } catch (e) {
+    debugPrint('[invite] error=$e');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('ネットワークエラーで招待に失敗しました')),
+      );
+    }
+    return false;
+  }
+}
+
   @override
   Widget build(BuildContext context) {
+    final self    = MatchUser(
+      userId: widget.currentUserId,
+      avatarUrl: _selfAvatarUrl,
+      displayName: 'あなた',
+    );
+    final partner = MatchUser(
+      userId: widget.matchedUserId,
+      avatarUrl: _partnerAvatarUrl,
+      displayName: widget.matchedUserNickname,
+    );
+
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -77,6 +594,17 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: Column(
         children: [
+          // ★ 上部にマッチ画像＋相対アバター/プレースホルダー
+          MatchBanner(
+            mode: widget.headerMode,
+            self: self,
+            partner: partner,
+            myInvitee: null,            // 必要ならサーバから取得して渡す
+            partnerInvitee: null,       // 必要ならサーバから取得して渡す
+            onInvite: (widget.conversationId != null) ? _inviteToConversation : null,
+          ),
+
+          // ↓ メッセージリスト
           Expanded(
             child: ListView.builder(
               reverse: true,
@@ -110,9 +638,11 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ),
                 );
-              }
+              },
             ),
           ),
+
+          // 入力欄
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             color: Colors.grey[900],
@@ -127,15 +657,17 @@ class _ChatScreenState extends State<ChatScreen> {
                       hintStyle: TextStyle(color: Colors.white60),
                       border: InputBorder.none,
                     ),
+                    onSubmitted: (v) {
+                      final t = v.trim();
+                      if (t.isNotEmpty) sendMessage(t);
+                    },
                   ),
                 ),
                 IconButton(
                   icon: const Icon(Icons.send, color: Colors.white),
                   onPressed: () {
                     final text = _controller.text.trim();
-                    if (text.isNotEmpty) {
-                      sendMessage(text);
-                    }
+                    if (text.isNotEmpty) sendMessage(text);
                   },
                 ),
               ],
@@ -143,13 +675,15 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ],
       ),
+
+      // 既存のボトムバー
       bottomNavigationBar: _buildBottomNavigationBar(context, widget.currentUserId),
     );
   }
 
   Widget _buildBottomNavigationBar(BuildContext context, String userId) {
     return Container(
-      height: 60,
+      height: 70,
       decoration: const BoxDecoration(
         color: Colors.white,
         boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
@@ -159,41 +693,38 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           GestureDetector(
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => ProfileBrowseScreen(currentUserId: userId)),
-              );
+              Navigator.push(context, MaterialPageRoute(builder: (_) => ProfileBrowseScreen(currentUserId: userId)));
             },
-            child: const Icon(Icons.home_outlined, color: Colors.black),
+            child: const Padding(
+              padding: EdgeInsets.only(bottom: 10.0),
+              child: Icon(Icons.home_outlined, color: Colors.black),
+            ),
           ),
           GestureDetector(
             onTap: () {
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => DiscoveryScreen(userId: userId),
-                ),
-              );
+              Navigator.push(context, MaterialPageRoute(builder: (_) => DiscoveryScreen(userId: userId)));
             },
-            child: const Icon(Icons.search, color: Colors.black),
+            child: const Padding(
+              padding: EdgeInsets.only(bottom: 10.0),
+              child: Icon(Icons.search, color: Colors.black),
+            ),
           ),
-          Image.asset('assets/logo_text.png', width: 70),
+          const Padding(
+            padding: EdgeInsets.only(bottom: 10.0),
+            child: Image(image: AssetImage('assets/logo_text.png'), width: 70),
+          ),
+          const Padding(
+            padding: EdgeInsets.only(bottom: 10.0),
+            child: Icon(Icons.mail, color: Colors.black),
+          ),
           GestureDetector(
             onTap: () {
-              // 現在のチャット画面にとどまる
+              Navigator.push(context, MaterialPageRoute(builder: (_) => UserProfileScreen(userId: userId)));
             },
-            child: const Icon(Icons.send_outlined, color: Colors.black),
-          ),
-          GestureDetector(
-            onTap: () {
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => UserProfileScreen(userId: userId),
-                ),
-              );
-            },
-            child: const Icon(Icons.person_outline, color: Colors.black),
+            child: const Padding(
+              padding: EdgeInsets.only(bottom: 10.0),
+              child: Icon(Icons.person_outline, color: Colors.black),
+            ),
           ),
         ],
       ),

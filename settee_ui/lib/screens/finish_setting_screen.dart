@@ -35,6 +35,8 @@ class _FinalSettingScreenState extends State<FinalSettingScreen> {
 
   Future<void> _storeUserId() async {
     final prefs = await SharedPreferences.getInstance();
+
+    // 自動ログイン用の user_id を保存
     await prefs.setString('user_id', widget.userId);
   }
 

@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Settee Ui</string>
+	<string>Settee</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>settee_ui</string>
+	<string>Settee</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -27,9 +27,13 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>プロフィール画像を撮影するために使用します。</string>
+	<string>本人確認のためにカメラを使用します</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>動画撮影時にマイクを使用します（音声は記録しません）</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>撮影した本人確認画像を保存するために使用します</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>プロフィール画像を選ぶために使用します。</string>
+	<string>本人確認用の画像を保存・選択するために使用します</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
@@ -49,5 +53,7 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

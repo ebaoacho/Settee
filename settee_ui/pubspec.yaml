@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.1+5
+version: 1.0.0+4
 
 environment:
   sdk: ^3.8.0
@@ -39,6 +39,15 @@ dependencies:
   google_fonts: ^6.1.0
   web_socket_channel: ^2.4.0
   shared_preferences: ^2.2.2
+  flutter_markdown: ^0.7.2+1
+  camera: ^0.11.0
+  url_launcher: ^6.3.0
+
+flutter_icons:       
+  android: true
+  ios: true
+  image_path_android: "assets/app_icon.png"
+  image_path_ios: "assets/app_icon.png"
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -84,6 +93,20 @@ flutter:
     - assets/maybe_your_type_for_female.png
     - assets/liked_you_for_female.png
     - assets/white_logo_text.png
+    - assets/hitoride_match.png
+    - assets/minnnade_match.png
+    - assets/area_choice.png
+    - assets/boost.png
+    - assets/refine.png
+    - assets/private.png
+    - assets/message_like.png
+    - assets/super_like.png
+    - assets/settee_plus.png
+    - assets/superlike_banner.png
+    - assets/messagelike_banner.png
+    - assets/treatlike_banner.png
+    - assets/DoubleMatch.png
+    - assets/SingleMatch.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

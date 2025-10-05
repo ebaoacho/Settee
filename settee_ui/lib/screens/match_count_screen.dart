@@ -16,6 +16,7 @@ class MatchCountScreen extends StatefulWidget {
   final String userId;
   final String password;
   final File? selectedImage;
+  final File? subImage;
   final List<String> selectedAreas;
 
   const MatchCountScreen({
@@ -28,6 +29,7 @@ class MatchCountScreen extends StatefulWidget {
     required this.userId,
     required this.password,
     required this.selectedImage,
+    required this.subImage,
     required this.selectedAreas,
   });
 
@@ -39,17 +41,16 @@ class _MatchCountScreenState extends State<MatchCountScreen> {
   String? selectedOption;
   bool isLoading = false;
 
-  Future<void> _uploadImage(File imageFile, String userId) async {
+  Future<void> _uploadImage(File imageFile, String userId, String index) async {
     final url = Uri.parse('https://settee.jp/upload-image/');
-    final mimeType = lookupMimeType(imageFile.path) ?? 'image/jpeg';
 
     final request = http.MultipartRequest('POST', url)
       ..fields['user_id'] = userId
+      ..fields['image_index'] = index
       ..files.add(
         await http.MultipartFile.fromPath(
           'image',
           imageFile.path,
-          contentType: MediaType('image', mimeType.split('/').last),
           filename: p.basename(imageFile.path),
         ),
       );
@@ -91,8 +92,15 @@ class _MatchCountScreenState extends State<MatchCountScreen> {
 
       // 登録成功後に画像をアップロード
       if (widget.selectedImage != null) {
-        await _uploadImage(widget.selectedImage!, widget.userId);
+        await _uploadImage(widget.selectedImage!, widget.userId, "1");
       }
+
+      if (widget.subImage != null) {
+        await _uploadImage(widget.subImage!, widget.userId, "2");
+      }
+
+      // キャッシュ回避のため少し待機
+      await Future.delayed(const Duration(milliseconds: 300));
 
       if (!mounted) return;
       Navigator.push(

@@ -1,17 +1,13 @@
+# settee_app/management/commands/print_messages.py
 from django.core.management.base import BaseCommand
 from settee_app.models import Message
 
 class Command(BaseCommand):
-    help = 'Messagesテーブルの内容を表示します'
+    help = "Print messages safely (handles deleted users)"
 
-    def handle(self, *args, **kwargs):
-        messages = Message.objects.all().order_by('timestamp')
-
-        if not messages.exists():
-            self.stdout.write(self.style.WARNING("📭 メッセージが1件も存在しません"))
-            return
-
-        for msg in messages:
-            self.stdout.write(
-                f"[{msg.timestamp}] {msg.sender.user_id} → {msg.receiver.user_id}: {msg.text}"
-            )
+    def handle(self, *args, **options):
+        qs = Message.objects.select_related('sender', 'receiver').order_by('timestamp')
+        for msg in qs:
+            s = getattr(msg.sender, 'user_id', '退会したユーザー')
+            r = getattr(msg.receiver, 'user_id', '退会したユーザー')
+            self.stdout.write(f"[{msg.timestamp}] {s} → {r}: {msg.text}")
