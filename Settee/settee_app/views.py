@@ -7,7 +7,7 @@ import shutil
 import unicodedata
 # from distutils.util import strtobool
 from datetime import timedelta
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, transaction, models
 from django.conf import settings
 from django.contrib.auth.hashers import make_password, check_password
 from django.utils import timezone
@@ -30,7 +30,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 from rest_framework import status
 from datetime import date
-from .models import UserProfile, Conversation, ConversationMember, ConversationKind, LikeAction, Message, Block, UserTicket, ImageAsset, Report, LikeType
+from .models import UserProfile, Conversation, ConversationMember, ConversationKind, LikeAction, Message, Block, UserTicket, ImageAsset, Report, LikeType, Match
 from .serializers import UserProfileSerializer, LikeActionSerializer, MessageSerializer, ReportSerializer
 
 @api_view(['POST'])
@@ -627,7 +627,98 @@ def matched_users(request, current_user_id):
 
     except Exception as e:
         return Response({'error': str(e)}, status=500)
+
+@api_view(['GET'])
+def get_unread_matches(request, user_id):
+    try:
+        user = UserProfile.objects.get(user_id=user_id)
+    except UserProfile.DoesNotExist:
+        return Response({'error': 'ユーザーが見つかりません'}, status=404)
     
+    # 未読マッチのみ取得（userオブジェクトを使う）
+    unread_matches = Match.objects.filter(
+        Q(user_lower_id=user, lower_user_seen=False) |
+        Q(user_higher_id=user, higher_user_seen=False)
+    ).select_related('user_lower_id', 'user_higher_id').order_by('-matched_at')
+    
+    # QuerySetをシリアライズ
+    matches_data = []
+    for match in unread_matches:
+        # パートナーを手動で取得
+        if match.user_lower_id == user:
+            partner = match.user_higher_id
+        else:
+            partner = match.user_lower_id
+            
+        matches_data.append({
+            'match_id': match.id,
+            'matched_at': match.matched_at,
+            'partner': {        
+                'user_id': partner.user_id,
+                'nickname': partner.nickname,
+            }
+        })
+    
+    return Response({
+        'unread_count': unread_matches.count(),
+        'matches': matches_data
+    }, status=200)
+
+@api_view(['POST'])
+def match(request):
+    me_id = request.data.get('me')
+    other_id = request.data.get('other')
+    
+    if not me_id or not other_id:
+        return Response({'error': 'me と other は必須です'}, status=400)
+    
+    try: 
+        me = UserProfile.objects.get(user_id=me_id)
+        other = UserProfile.objects.get(user_id=other_id)
+    except UserProfile.DoesNotExist:
+        return Response({'error': 'ユーザーが存在しません'}, status=404)
+    
+    # 同じユーザー同士のマッチを防止
+    if me.id == other.id:
+        return Response({'error': '自分自身とはマッチできません'}, status=400)
+    
+    # 既存のマッチをチェック
+    try:
+        Match.get_match(me, other)
+        return Response({'error': '既にマッチしています'}, status=400)
+    except Match.DoesNotExist:
+        pass  # マッチが存在しない場合は続行
+    
+    match = Match.create_match(me, other)
+    return Response({
+        'message': 'マッチングしました',
+        'match_id': match.id,
+        'matched_at': match.matched_at
+    }, status=201)
+
+@api_view(['PATCH'])
+def update_read_match(request, user_id, other_id):
+    try:
+        # 両方のユーザーを取得
+        user = UserProfile.objects.get(user_id=user_id)
+        other = UserProfile.objects.get(user_id=other_id)
+    except UserProfile.DoesNotExist:
+        return Response({'error': 'ユーザーが見つかりません'}, status=404)
+    
+    # Match.get_match() を使う（自動的に順序を正規化）
+    try:
+        match = Match.get_match(user, other)
+    except Match.DoesNotExist:
+        return Response({'error': 'マッチが見つかりません'}, status=404)
+    
+    # 既読状態を更新
+    match.mark_seen_by(user)
+    
+    return Response({
+        'message': '既読にしました',
+        'match_id': match.id
+    }, status=200)
+
 # ------------- 共通: DM 会話を作る/見つける -------------
 def ensure_dm_conversation(user_a: UserProfile, user_b: UserProfile) -> Conversation:
     # 2人とも入っている DM を再利用（なければ作成）
