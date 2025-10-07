@@ -1092,7 +1092,17 @@ def update_selected_areas(request, user_id):
         return Response({'message': 'Selected areas updated successfully.'})
     except UserProfile.DoesNotExist:
         return Response({'error': 'User not found.'}, status=404)
-    
+
+@api_view(['POST'])
+def add_settee_points(request):
+    try:
+        user = UserProfile.objects.get(user_id=request.data.get('user_id'))
+        user.settee_points += request.data.get('amount')
+        user.save()
+        return Response({'message': 'ポイントが作成されました'}, status=200)
+    except UserProfile.DoesNotExist:
+        return Response({'error': 'ユーザーが存在しません'}, status=404)
+
 @api_view(['POST'])
 def update_match_multiple(request, user_id):
     try:
