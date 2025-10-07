@@ -50,6 +50,7 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
   Map<String, Map<int, String>> userImageUrls = {};
   Map<String, int> imageIndexes = {};
   final PageController _pageController = PageController();
+  List<Map<String, dynamic>> _unreadMatches = [];
   bool isFetching = false;
   bool isLoading = true;
   bool? isMatchMultiple;
@@ -147,7 +148,230 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _bootstrap();
+      _checkAndShowUnreadMatchesDialog();
     });
+  }
+
+  Future<void> _checkAndShowUnreadMatchesDialog() async {
+    if (!mounted) return;
+
+    try {
+      final uri = Uri.parse(
+        'https://settee.jp/unread-matches/${widget.currentUserId}/',
+      );
+      final r = await http.get(uri);
+      if (r.statusCode == 200) {
+        final j = jsonDecode(r.body) as Map<String, dynamic>;
+        final unreadCount = j['unread_count'] as int? ?? 0;
+        final matches = j['matches'] as List<dynamic>;
+        var partnerIds = <String>[];
+        for (final match in matches) {
+          partnerIds.add(match['partner']['user_id'] as String);
+        }
+        
+
+        if (unreadCount > 0 && mounted) {
+          _showUnreadMatchesDialog(context, unreadCount, partnerIds);
+        }
+      }
+    } catch (e) {
+      debugPrint('未読マッチチェックエラー: $e');
+    }
+  }
+
+
+  Future<bool?> showModernMatchDialog(BuildContext context, int unreadCount) {
+      return showGeneralDialog<bool>(
+        context: context,
+        barrierDismissible: true,
+        barrierLabel: 'match_notification',
+        barrierColor: Colors.black.withOpacity(0.45),
+        transitionDuration: const Duration(milliseconds: 220),
+        pageBuilder: (_, __, ___) => const SizedBox.shrink(),
+        transitionBuilder: (ctx, anim, __, ___) {
+          final curved = CurvedAnimation(
+            parent: anim,
+            curve: Curves.easeOutCubic,
+            reverseCurve: Curves.easeInCubic,
+          );
+
+          return BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+            child: Opacity(
+              opacity: curved.value,
+              child: Center(
+                child: Transform.scale(
+                  scale: 0.92 + 0.08 * curved.value,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: Container(
+                      width: MediaQuery.of(ctx).size.width * 0.86,
+                      padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF121212).withOpacity(0.92),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: Colors.white.withOpacity(0.06)),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Colors.black26,
+                            blurRadius: 26,
+                            offset: Offset(0, 14),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // アイコンバッジ
+                          Container(
+                            width: 54,
+                            height: 54,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFFFF6B9D), Color(0xFFFF1744)],
+                              ),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Color(0x55FF1744),
+                                  blurRadius: 14,
+                                ),
+                              ],
+                            ),
+                            child: const Icon(
+                              Icons.favorite_rounded,
+                              color: Colors.white,
+                              size: 28,
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          const Text(
+                            '新しいマッチ！',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            '$unreadCount件の新しいマッチがあります。\n今すぐチェックしてみましょう！',
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 13,
+                              height: 1.35,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 18),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  style: OutlinedButton.styleFrom(
+                                    side: BorderSide(
+                                      color: Colors.white.withOpacity(0.28),
+                                    ),
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 12,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  onPressed: () => Navigator.pop(ctx, false),
+                                  child: const Text('後で'),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFFFF1744),
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 12,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    shadowColor: const Color(0x66FF1744),
+                                    elevation: 6,
+                                  ),
+                                  onPressed: () => Navigator.pop(ctx, true),
+                                  child: const Text('確認する'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    }
+
+  void _showUnreadMatchesDialog(BuildContext context, int unreadCount, List<String> partnerIds) async {
+    final result = await showModernMatchDialog(context, unreadCount);
+
+    // mounted チェックを追加してBuildContextの安全性を確保
+    if (result == true && mounted) {
+      // 確認するボタンが押された場合
+      if (!mounted) return;
+
+      // TODO: N+1問題解消
+      for (final partnerId in partnerIds) {
+        final url = 'https://settee.jp/match/${widget.currentUserId}/$partnerId/read/';
+        debugPrint('既読更新URL: $url');
+        
+        final updateResponse = await http.patch(
+          Uri.parse(url),
+          headers: {'Content-Type': 'application/json'},
+        );
+
+        if (updateResponse.statusCode == 200) {
+          debugPrint('既読にしました');
+        } else {
+          debugPrint('既読更新失敗: ${updateResponse.statusCode}');
+          debugPrint('レスポンスボディ: ${updateResponse.body}');
+        }
+      }
+
+      // マッチ一覧画面に遷移
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => MatchedUsersScreen(userId: widget.currentUserId),
+        ),
+      );
+    }
+
+    // TODO: N+1問題解消
+    for (final partnerId in partnerIds) {
+      final url =
+          'https://settee.jp/match/${widget.currentUserId}/$partnerId/read/';
+      debugPrint('既読更新URL: $url');
+
+      final updateResponse = await http.patch(
+        Uri.parse(url),
+        headers: {'Content-Type': 'application/json'},
+      );
+
+      if (updateResponse.statusCode == 200) {
+        debugPrint('既読にしました');
+      } else {
+        debugPrint('既読更新失敗: ${updateResponse.statusCode}');
+        debugPrint('レスポンスボディ: ${updateResponse.body}');
+      }
+    }
+    // result == false または null の場合は何もしない（ダイアログを閉じるだけ）
   }
 
   Future<void> _bootstrap() async {
@@ -191,6 +415,50 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
     return (j['id'] as num?)?.toInt();
   }
 
+  Future<void> _createMatchAndMarkRead(String me, String other) async {
+    try {
+      // 1. マッチを作成
+      final matchResponse = await http.post(
+        Uri.parse('https://settee.jp/match/'),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'me': me,
+          'other': other,
+        }),
+      );
+      debugPrint('matchResponse: ${matchResponse.body}');
+      
+      if (matchResponse.statusCode == 201) {
+        debugPrint('マッチ作成成功');
+         
+        // 2. 必要であれば既読にする
+        final updateResponse = await http.patch(
+          Uri.parse('https://settee.jp/match/$me/$other/read/'),
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        );
+        
+        if (updateResponse.statusCode == 200) {
+          debugPrint('既読にしました');
+        } else {
+          debugPrint('既読更新失敗: ${updateResponse.statusCode}');
+        }
+        
+      } else if (matchResponse.statusCode == 400) {
+        final error = jsonDecode(matchResponse.body);
+        debugPrint('マッチ作成失敗: ${error['error']}');
+      } else {
+        debugPrint('マッチ作成失敗: ${matchResponse.statusCode}');
+      }
+      
+    } catch (e) {
+      debugPrint('エラー: $e');
+    }
+  }
+
   /// like送信後、「相互Likeになったか」を確認してマッチ演出を表示
   Future<void> _checkAndShowMatch(String otherUserId) async {
     // ---- 追加: ログ & ID正規化 & 二重起動ガード ----
@@ -215,6 +483,8 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
       final r = await http.get(uri).timeout(const Duration(seconds: 8));
       _m('matched-users status=${r.statusCode}');
       if (r.statusCode != 200 || !mounted) return;
+
+      await _createMatchAndMarkRead(me, other);
 
       final List list = jsonDecode(r.body) as List;
       final Map<String, dynamic>? partnerEntry = list.cast<Map<String, dynamic>?>()
@@ -253,6 +523,11 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
           headerMode: headerMode,          // ← 先ほどのバナーと同じ配置ルールを使用
         ),
       ));
+      
+      // マッチ画面から戻った後に未読マッチを更新
+      if (mounted) {
+        await _checkAndShowUnreadMatchesDialog();
+      }
     } catch (e) {
       debugPrint('match-check failed: $e');
     }

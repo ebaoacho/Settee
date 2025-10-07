@@ -490,6 +490,86 @@ class LikeAction(models.Model):
     def has_message(self) -> bool:
         return bool(self.message and self.message.strip())
 
+class Match(models.Model):
+    """
+    マッチング成立を記録するテーブル
+    """
+    # 実際にはどちらにも入る可能性あり
+    user_lower_id = models.ForeignKey(
+        'UserProfile', 
+        related_name='matches_as_lower', 
+        on_delete=models.CASCADE,
+        help_text="IDが小さい方のユーザー"
+    )
+    user_higher_id = models.ForeignKey(
+        'UserProfile', 
+        related_name='matches_as_higher', 
+        on_delete=models.CASCADE,
+        help_text="IDが大きい方のユーザー"
+    )
+    matched_at = models.DateTimeField(auto_now_add=True)
+
+    # 各ユーザーの既読状態
+    lower_user_seen = models.BooleanField(default=False)
+    lower_user_seen_at = models.DateTimeField(null=True, blank=True)
+    
+    higher_user_seen = models.BooleanField(default=False)
+    higher_user_seen_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'match'
+        unique_together = ('user_lower_id', 'user_higher_id')
+        indexes = [
+            models.Index(fields=['user_lower_id', 'lower_user_seen']),
+            models.Index(fields=['user_higher_id', 'higher_user_seen']),
+            models.Index(fields=['-matched_at']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(user_lower_id__lt=models.F('user_higher_id')),
+                name='match_user_order'
+            )
+        ]
+    
+    def __str__(self):
+        return f"{self.user_lower_id.user_id} ⇄ {self.user_higher_id.user_id}"
+
+    @classmethod
+    def create_match(cls, user1, user2):
+        """
+        一旦の対処として、user1をlower、user2をhigherとして保存
+        user_idが文字列なので、IDでの比較は意味がない
+        """
+        return cls.objects.create(user_lower_id=user1, user_higher_id=user2)
+    
+    @classmethod
+    def get_match(cls, user1, user2):
+        # user_idが文字列なので、一旦の対処として2つのクエリを発行
+        try:
+            # user1がlower、user2がhigherの場合
+            return cls.objects.get(user_lower_id=user1, user_higher_id=user2)
+        except cls.DoesNotExist:
+            try:
+                # user1がhigher、user2がlowerの場合
+                return cls.objects.get(user_lower_id=user2, user_higher_id=user1)
+            except cls.DoesNotExist:
+                raise cls.DoesNotExist
+
+    def mark_seen_by(self, user):
+        """
+        特定ユーザーが既読にする
+        user.idは主キーなので、FKとの比較は正しく動作する
+        """
+        now = timezone.now()
+        if user.id == self.user_lower_id_id:  # 主キーでの比較
+            self.lower_user_seen = True
+            self.lower_user_seen_at = now
+            self.save(update_fields=['lower_user_seen', 'lower_user_seen_at'])
+        elif user.id == self.user_higher_id_id:  # 主キーでの比較
+            self.higher_user_seen = True
+            self.higher_user_seen_at = now
+            self.save(update_fields=['higher_user_seen', 'higher_user_seen_at'])
+
 class ConversationKind(models.TextChoices):
     DM     = 'dm',     'Direct'
     DOUBLE = 'double', 'DoubleMatch'   # 「みんなでマッチ」用

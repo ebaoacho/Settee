@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import path
-from settee_app.views import register_user, login_user, upload_user_image, recommended_users, like_user, get_user_profile, popular_users, recent_users, matched_users, send_message, get_messages, get_available_dates,  update_available_dates, get_selected_areas, update_selected_areas, update_match_multiple, update_user_profile, health_check, serve_image, delete_account, block_user, report_user, admin_issue_token, admin_list_images_for_user, admin_delete_image, admin_users_by_reports, admin_ban_user, admin_user_ids, user_tickets, exchange_ticket, use_ticket, get_user_entitlements, liked_users, change_email, change_phone, toggle_reviewed, admin_reports_list, admin_report_mark_read, admin_user_reports_read_all, upload_admin_user_image, serve_kyc_image, admin_kyc_list_images_for_user, admin_kyc_delete_image, admin_kyc_toggle_reviewed, admin_kyc_delete_user, received_likes, start_double_match, invite_to_conversation, list_conversations_for_user, send_message_to_conversation, get_conversation_messages
+from settee_app.views import register_user, login_user, upload_user_image, recommended_users, like_user, get_user_profile, popular_users, recent_users, matched_users, send_message, get_messages, get_available_dates,  update_available_dates, get_selected_areas, update_selected_areas, update_match_multiple, update_user_profile, health_check, serve_image, delete_account, block_user, report_user, admin_issue_token, admin_list_images_for_user, admin_delete_image, admin_users_by_reports, admin_ban_user, admin_user_ids, user_tickets, exchange_ticket, use_ticket, get_user_entitlements, liked_users, change_email, change_phone, toggle_reviewed, admin_reports_list, admin_report_mark_read, admin_user_reports_read_all, upload_admin_user_image, serve_kyc_image, admin_kyc_list_images_for_user, admin_kyc_delete_image, admin_kyc_toggle_reviewed, admin_kyc_delete_user, received_likes, start_double_match, invite_to_conversation, list_conversations_for_user, send_message_to_conversation, get_conversation_messages, get_unread_matches, match, update_read_match
 from django.conf import settings
 from django.conf.urls.static import static
 
@@ -15,6 +15,9 @@ urlpatterns = [
     path('popular-users/<str:current_user_id>/', popular_users, name='popular_users'),
     path('recent-users/<str:current_user_id>/', recent_users, name='recent_users'),
     path('matched-users/<str:current_user_id>/', matched_users, name='matched_users'),
+    path('unread-matches/<str:user_id>/', get_unread_matches, name='get_unread_matches'),
+    path('match/', match, name='match'),
+    path('match/<str:user_id>/<str:other_id>/read/', update_read_match, name='update_read_match'),
     path('messages/send/', send_message, name='send_message'),
     path('messages/<str:user1_id>/<str:user2_id>/', get_messages, name='get_messages'),
     path('user-profile/<str:user_id>/', get_available_dates, name='get_available_dates'),
