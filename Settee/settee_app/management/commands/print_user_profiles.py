@@ -56,3 +56,4 @@ class Command(BaseCommand):
             w(f"MBTI　　　　　　 : {fmt(u.mbti)}")
             w(f"求めているのは　　: {fmt(u.seeking)}")
             w(f"好み　　　　　　　: {fmt(u.preference)}")
+            w(f"ポイント　　　　　: {fmt(u.settee_points)}")

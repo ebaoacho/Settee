@@ -459,6 +459,24 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
     }
   }
 
+  Future<void> _addSetteePoints(String userId, int amount ) async {
+    final uri = Uri.parse('https://settee.jp/add_settee_points/');
+    final r = await http.post(
+      uri, 
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: jsonEncode(
+        {'user_id': userId, 'amount': amount}
+      ));
+    if (r.statusCode == 200) {
+      debugPrint('ポイントが作成されました');
+    } else {
+      debugPrint('ポイント作成失敗: ${r.statusCode}');
+      debugPrint('レスポンスボディ: ${r.body}');
+    }
+  }
+
   /// like送信後、「相互Likeになったか」を確認してマッチ演出を表示
   Future<void> _checkAndShowMatch(String otherUserId) async {
     // ---- 追加: ログ & ID正規化 & 二重起動ガード ----
@@ -485,6 +503,8 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
       if (r.statusCode != 200 || !mounted) return;
 
       await _createMatchAndMarkRead(me, other);
+      await _addSetteePoints(me, 5);
+      await _addSetteePoints(other, 5);
 
       final List list = jsonDecode(r.body) as List;
       final Map<String, dynamic>? partnerEntry = list.cast<Map<String, dynamic>?>()
