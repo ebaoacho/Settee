@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -439,12 +440,24 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String? _selfAvatarUrl;
   String? _partnerAvatarUrl;
+  Timer? _timer;
 
   @override
   void initState() {
     super.initState();
     _loadAvatars();
     fetchMessages();
+    // 5秒ごとにポーリング
+    _timer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      fetchMessages();
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel(); // タイマーを停止してメモリリークを防ぐ
+    _controller.dispose();
+    super.dispose();
   }
 
   // ---- 1枚目アバターURLを“できるだけ確実に”返す（HEAD→GET Range）
