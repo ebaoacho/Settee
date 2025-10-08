@@ -608,14 +608,18 @@ class Conversation(models.Model):
         self.save(update_fields=['last_message_at', 'updated_at'])
 
 class ConversationMember(models.Model):
-    conversation = models.ForeignKey(Conversation, related_name='members',
-                                     on_delete=models.CASCADE)
-    user         = models.ForeignKey('UserProfile', related_name='conversation_memberships',
-                                     on_delete=models.CASCADE)
-    role         = models.CharField(max_length=10, default='member')  # 'owner' / 'admin' / 'member'
+    conversation = models.ForeignKey(Conversation, related_name='members', on_delete=models.CASCADE)
+    user         = models.ForeignKey('UserProfile', related_name='conversation_memberships', on_delete=models.CASCADE)
+    role         = models.CharField(max_length=10, default='member')
     is_muted     = models.BooleanField(default=False)
     joined_at    = models.DateTimeField(auto_now_add=True)
     left_at      = models.DateTimeField(null=True, blank=True)
+
+    # ★ 追加：誰に招待されたか（初期メンバーはNULL）
+    invited_by   = models.ForeignKey(
+        'UserProfile', null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='invites_made'
+    )
 
     class Meta:
         unique_together = (('conversation', 'user'),)
@@ -623,11 +627,9 @@ class ConversationMember(models.Model):
             models.Index(fields=['user']),
             models.Index(fields=['conversation']),
             models.Index(fields=['conversation', 'left_at']),
+            models.Index(fields=['conversation', 'invited_by']),
         ]
-
-    def __str__(self):
-        return f"{self.user_id} in {self.conversation_id}"
-
+        
 class Message(models.Model):
     conversation = models.ForeignKey(Conversation, related_name='messages',
                                      on_delete=models.CASCADE)

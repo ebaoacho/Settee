@@ -213,8 +213,8 @@ class _PaywallScreenState extends State<PaywallScreen> {
           ]
         : [
             _PriceItem('1m', baseTotal: 890, campTotal: 580, label: "1ヶ月"),
-            _PriceItem('3m', baseTotal: 2010, campTotal: 1500, label: "3ヶ月 (¥500/月)"),
-            _PriceItem('6m', baseTotal: 2940, campTotal: 2400, label: "6ヶ月 (¥400/月)"),
+            _PriceItem('3m', baseTotal: 2080, campTotal: 1500, label: "3ヶ月 (¥500/月)"),
+            _PriceItem('6m', baseTotal: 2980, campTotal: 2400, label: "6ヶ月 (¥400/月)"),
           ];
 
     const double _kPriceTileMinHeight = 120;

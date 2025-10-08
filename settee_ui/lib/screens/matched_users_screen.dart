@@ -1,10 +1,33 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+
 import 'profile_browse_screen.dart';
 import 'discovery_screen.dart';
 import 'user_profile_screen.dart';
 import 'chat_screen.dart';
+
+enum _ItemKind { dm, group }
+
+class _ChatListItem {
+  final _ItemKind kind;
+  final int? conversationId;
+  final String? partnerUserId;
+  final String title;
+  final List<String> avatarUserIds;
+  _ChatListItem.dm({required this.partnerUserId, required this.title, required this.avatarUserIds})
+      : kind = _ItemKind.dm, conversationId = null;
+  _ChatListItem.group({required this.conversationId, required this.title, required this.avatarUserIds})
+      : kind = _ItemKind.group, partnerUserId = null;
+}
+// 画面クラスの先頭付近に追加
+enum _ConvMode { single, double }
+
+class _ConvInfo {
+  final _ConvMode mode;
+  final int? conversationId;
+  const _ConvInfo(this.mode, this.conversationId);
+}
 
 class MatchedUsersScreen extends StatefulWidget {
   final String userId;
@@ -16,8 +39,10 @@ class MatchedUsersScreen extends StatefulWidget {
 }
 
 class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
-  List<dynamic> matchedUsers = [];
-  bool isLoading = true;
+  bool _loading = true;
+  List<_ChatListItem> _items = [];
+  final Map<String, String> _nameById = {};
+
   // 対応拡張子（必要に応じて増減OK）
   static const List<String> kSupportedImageExts = ['jpg', 'jpeg', 'png', 'webp'];
 
@@ -27,6 +52,209 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
   // 画像更新後に手動でキャッシュ破棄したい場合に使う（任意）
   // 例: _cacheBuster['user123-1'] = DateTime.now().millisecondsSinceEpoch;
   final Map<String, int> _cacheBuster = {};
+
+  final Map<String, _ConvInfo> _convCache = {}; // key = otherUserId
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    setState(() => _loading = true);
+    await Future.wait([
+      _fetchNameDictionary(),        // DM表示用に相手名の辞書を作る
+      _buildItemsFromConversations() // 一覧の本体（DM/グループを会話単位で作る）
+    ]);
+    if (mounted) setState(() => _loading = false);
+  }
+
+  // 既存API: /matched-users/<me>/ は「名前辞書」としてだけ利用
+  Future<void> _fetchNameDictionary() async {
+    try {
+      final uri = Uri.parse('https://settee.jp/matched-users/${widget.userId}/');
+      final res = await http.get(uri);
+      if (res.statusCode == 200) {
+        final list = jsonDecode(res.body) as List;
+        for (final e in list) {
+          final id = (e['user_id'] ?? '').toString();
+          final nick = (e['nickname'] ?? '').toString();
+          if (id.isNotEmpty && nick.isNotEmpty) _nameById[id] = nick;
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 一覧の本体: /conversations/user/<me>/ の結果から DM/グループを構築
+  Future<void> _buildItemsFromConversations() async {
+    final items = <_ChatListItem>[];
+    try {
+      final uri = Uri.parse('https://settee.jp/conversations/user/${widget.userId}/');
+      final res = await http.get(uri);
+      if (res.statusCode != 200) {
+        _items = items;
+        return;
+      }
+      final List<dynamic> raw = jsonDecode(utf8.decode(res.bodyBytes));
+      for (final it in raw) {
+        final kind = (it['kind'] ?? '').toString().toLowerCase();
+        final members = _extractMemberUserIds(it['members']);
+        if (!members.contains(widget.userId)) continue; // 念のため
+
+        if (kind == 'dm') {
+          final other = members.firstWhere((m) => m != widget.userId, orElse: () => '');
+          if (other.isEmpty) continue;
+          final title = _nameById[other] ?? other;
+          items.add(_ChatListItem.dm(
+            partnerUserId: other,
+            title: title,
+            avatarUserIds: [other],
+          ));
+        } else if (kind == 'double') {
+          final cid = (it['id'] is int) ? it['id'] as int : int.tryParse('${it['id']}');
+          if (cid == null) continue;
+          final preview = members.where((m) => m != widget.userId).take(3).toList();
+          final title = 'グループ (${members.length})';
+          items.add(_ChatListItem.group(
+            conversationId: cid,
+            title: title,
+            avatarUserIds: preview,
+          ));
+        }
+      }
+    } catch (_) {}
+    _items = items;
+  }
+
+  // グループは最大3人の縮小アバターを重ねて表示（DMは1枚）
+  Widget _buildLeadingAvatars(_ChatListItem it) {
+    final ids = it.avatarUserIds;
+    if (ids.isEmpty) {
+      return const CircleAvatar(radius: 24, backgroundColor: Colors.white24,
+        child: Icon(Icons.people, color: Colors.white70));
+    }
+    if (ids.length == 1) {
+      return FutureBuilder<String?>(
+        future: _getAvatarUrl(ids.first),
+        builder: (_, snap) {
+          final u = snap.data;
+          return CircleAvatar(
+            radius: 24,
+            backgroundImage: (u != null) ? NetworkImage(u) : null,
+            backgroundColor: Colors.white10,
+            child: (u == null) ? const Icon(Icons.person, color: Colors.white70) : null,
+          );
+        },
+      );
+    }
+    return SizedBox(
+      width: 52, height: 48,
+      child: Stack(
+        children: List.generate(ids.length.clamp(0, 3), (i) {
+          return Positioned(
+            left: i * 16.0, top: 2,
+            child: FutureBuilder<String?>(
+              future: _getAvatarUrl(ids[i]),
+              builder: (_, snap) {
+                final u = snap.data;
+                return CircleAvatar(
+                  radius: 18,
+                  backgroundImage: (u != null) ? NetworkImage(u) : null,
+                  backgroundColor: Colors.white10,
+                  child: (u == null) ? const Icon(Icons.person, size: 18, color: Colors.white70) : null,
+                );
+              },
+            ),
+          );
+        }),
+      ),
+    );
+  }
+
+  List<String> _extractMemberUserIds(dynamic raw) {
+    final out = <String>{}; // 重複排除
+    if (raw is! List) return out.toList();
+
+    for (final e in raw) {
+      if (e is String) {
+        // すでに user_id の配列
+        if (e.isNotEmpty) out.add(e);
+        continue;
+      }
+      if (e is Map) {
+        // ① { user_id: "demo_user_1", ... }
+        final uid1 = (e['user_id'] ?? e['uid'] ?? '').toString();
+        if (uid1.isNotEmpty) { out.add(uid1); continue; }
+
+        // ② { user: "demo_user_1", ... }
+        final u = e['user'];
+        if (u is String && u.isNotEmpty) { out.add(u); continue; }
+
+        // ③ { user: { user_id: "demo_user_1", ... }, ... }
+        if (u is Map) {
+          final uid2 = (u['user_id'] ?? u['uid'] ?? u['username'] ?? '').toString();
+          if (uid2.isNotEmpty) { out.add(uid2); continue; }
+        }
+
+        // ④ どうしても user_id が見当たらない場合、e['id'] は DB の数値PKのことが多いので不採用
+        //    → ここで無理に id を user_id として扱わない（判定が壊れるため）
+      } else {
+        final s = e?.toString();
+        if (s != null && s.isNotEmpty) out.add(s);
+      }
+    }
+    return out.toList();
+  }
+
+  Future<Set<int>> _fetchDoubleConvIdsFor(String uid) async {
+    final uri = Uri.parse('https://settee.jp/conversations/user/$uid/');
+    try {
+      final res = await http.get(uri).timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return {};
+      final List items = jsonDecode(utf8.decode(res.bodyBytes));
+      final ids = <int>{};
+      for (final it in items) {
+        final kind = (it['kind'] ?? '').toString().toLowerCase();
+        if (kind != 'double') continue;
+        final cid = (it['id'] is int)
+            ? it['id'] as int
+            : int.tryParse('${it['id']}');
+        if (cid != null) ids.add(cid);
+      }
+      return ids;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<int?> _guessDoubleConversationWith(String otherUserId) async {
+    // まずは ID 集合の共通部分で判定（members を見ない）
+    final mine = await _fetchDoubleConvIdsFor(widget.userId);
+    if (mine.isEmpty) return null;
+
+    // 相手側の会話一覧が取れるなら共通集合で即決
+    try {
+      final theirs = await _fetchDoubleConvIdsFor(otherUserId);
+      final shared = mine.intersection(theirs);
+      if (shared.isNotEmpty) return shared.first;
+    } catch (_) {
+      // 続行（環境によっては他人の一覧が取れない想定）
+    }
+
+    // 相手一覧が取れない環境：自分の double 候補のメッセージを見て相手が喋っていれば該当とみなす
+    for (final cid in mine) {
+      try {
+        final uri = Uri.parse('https://settee.jp/conversations/$cid/messages/');
+        final res = await http.get(uri).timeout(const Duration(seconds: 6));
+        if (res.statusCode != 200) continue;
+        final List msgs = jsonDecode(utf8.decode(res.bodyBytes));
+        final talked = msgs.any((m) => (m is Map) && (m['sender']?.toString() == otherUserId));
+        if (talked) return cid;
+      } catch (_) {/* 次へ */}
+    }
+    return null;
+  }
 
   Future<String?> _blockUser(String blockerId, String blockedId) async {
     final uri = Uri.parse('https://settee.jp/block/');
@@ -42,6 +270,31 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
     } catch (e) {
       return '通信エラー: $e';
     }
+  }
+
+  Future<void> _prefetchConversationsForMe() async {
+    final uri = Uri.parse('https://settee.jp/conversations/user/${widget.userId}/');
+    try {
+      final res = await http.get(uri).timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return;
+
+      final List<dynamic> items = jsonDecode(utf8.decode(res.bodyBytes));
+      for (final it in items) {
+        final kind = (it['kind'] ?? '').toString().toLowerCase();
+        if (kind != 'double') continue;
+
+        final int? cid = (it['id'] is int) ? it['id'] as int : int.tryParse('${it['id']}');
+        if (cid == null) continue;
+
+        // ← ここだけ置き換え
+        final memberIds = _extractMemberUserIds(it['members']);
+        if (!memberIds.contains(widget.userId)) continue;
+        for (final m in memberIds) {
+          if (m == widget.userId) continue;
+          _convCache[m] = _ConvInfo(_ConvMode.double, cid);
+        }
+      }
+    } catch (_) {/* ignore */}
   }
 
   Future<String?> _reportUser({
@@ -74,75 +327,6 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
     } catch (e) {
       return '通信エラー: $e';
     }
-  }
-
-  void _showUserActions(BuildContext context, Map user) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF121212),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.block, color: Colors.redAccent),
-                title: const Text('ブロック', style: TextStyle(color: Colors.white)),
-                onTap: () async {
-                  Navigator.pop(ctx); // 一旦閉じる
-                  final ok = await _confirmBlock(context, user['nickname']);
-                  if (ok != true) return;
-
-                  final err = await _blockUser(widget.userId, user['user_id']);
-                  if (err == null) {
-                    // 自分→相手の Like はサーバ側で即削除済み。UI からも除去
-                    if (mounted) {
-                      setState(() {
-                        matchedUsers.removeWhere((u) => u['user_id'] == user['user_id']);
-                      });
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('ブロックしました')),
-                      );
-                    }
-                  } else {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
-                    }
-                  }
-                },
-              ),
-              const Divider(color: Colors.white12, height: 1),
-              ListTile(
-                leading: const Icon(Icons.flag_outlined, color: Colors.orangeAccent),
-                title: const Text('通報する', style: TextStyle(color: Colors.white)),
-                onTap: () async {
-                  Navigator.pop(ctx);
-                  final ok = await _confirmReport(context, user['nickname']);
-                  if (ok != true) return;
-
-                  final err = await _reportUser(targetId: user['user_id']);
-                  if (err == null) {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('通報しました')),
-                      );
-                    }
-                  } else {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
-                    }
-                  }
-                },
-              ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        );
-      },
-    );
   }
 
   Future<bool?> _confirmBlock(BuildContext context, String nickname) {
@@ -279,6 +463,47 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
     );
   }
 
+   // 相手との会話モードを決定
+  Future<_ConvInfo> _resolveModeForPair(String otherUserId) async {
+    // 0) キャッシュ
+    final cached = _convCache[otherUserId];
+    if (cached != null) return cached;
+
+    // 1) いつもどおり /conversations/user/me を見て members で判定
+    try {
+      final uri = Uri.parse('https://settee.jp/conversations/user/${widget.userId}/');
+      final res = await http.get(uri).timeout(const Duration(seconds: 10));
+      if (res.statusCode == 200) {
+        final List<dynamic> items = jsonDecode(utf8.decode(res.bodyBytes));
+        for (final it in items) {
+          final kind = (it['kind'] ?? '').toString().toLowerCase();
+          if (kind != 'double') continue;
+          final int? cid = (it['id'] is int) ? it['id'] as int : int.tryParse('${it['id']}');
+          if (cid == null) continue;
+
+          final memberIds = _extractMemberUserIds(it['members']);
+          if (memberIds.contains(widget.userId) && memberIds.contains(otherUserId)) {
+            final info = _ConvInfo(_ConvMode.double, cid);
+            _convCache[otherUserId] = info;
+            return info;
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 2) members で掴めなかった → 共通の double 会話ID から特定
+    final guessed = await _guessDoubleConversationWith(otherUserId);
+    if (guessed != null) {
+      final info = _ConvInfo(_ConvMode.double, guessed);
+      _convCache[otherUserId] = info;
+      return info;
+    }
+
+    // 3) それでも見つからなければシングル
+    final info = const _ConvInfo(_ConvMode.single, null);
+    _convCache[otherUserId] = info;
+    return info;
+  }
 
   Future<String?> _getExistingImageUrl(String userId, int index, List<String> extensions) async {
     final busterKey = '$userId-$index';
@@ -309,37 +534,6 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
     final url = await _getExistingImageUrl(userId, 1, kSupportedImageExts);
     _avatarUrlCache[userId] = url;
     return url;
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    fetchMatchedUsers();
-  }
-
-  Future<void> fetchMatchedUsers() async {
-    final url = Uri.parse('https://settee.jp/matched-users/${widget.userId}/');
-
-    try {
-      final response = await http.get(url);
-
-      if (response.statusCode == 200) {
-        setState(() {
-          matchedUsers = json.decode(response.body);
-          isLoading = false;
-        });
-      } else {
-        debugPrint('取得失敗: ${response.statusCode}');
-        setState(() {
-          isLoading = false;
-        });
-      }
-    } catch (e) {
-      debugPrint('通信エラー: $e');
-      setState(() {
-        isLoading = false;
-      });
-    }
   }
 
   @override
@@ -382,164 +576,81 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
             ),
           ),
           Expanded(
-            child: isLoading
+            child: _loading
                 ? const Center(child: CircularProgressIndicator(color: Colors.white))
                 : ListView.separated(
-                    itemCount: matchedUsers.length,
-                    separatorBuilder: (context, index) => const Divider(color: Colors.grey),
+                    itemCount: _items.length,
+                    separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),
                     itemBuilder: (context, index) {
-                      final user = matchedUsers[index] as Map<String, dynamic>;
-                      final userId = user['user_id'] as String?;
-                      final isDeleted = userId == '__deleted__';
-                      final nickname = (user['nickname'] as String?) ??
-                          (isDeleted ? '退会したユーザー' : '');
-
+                      final it = _items[index];
+                      final isGroup = it.kind == _ItemKind.group;
+                      final title = it.title;
                       return ListTile(
-                        key: ValueKey(userId ?? index),
-                        // ===== 左側：アイコン =====
-                        leading: isDeleted
-                            ? const CircleAvatar(
-                                radius: 24,
-                                backgroundColor: Colors.white24,
-                                child: Icon(Icons.person_off_rounded, color: Colors.white70),
-                              )
-                            : FutureBuilder<String?>(
-                                future: _getAvatarUrl(userId!),
-                                builder: (context, snapshot) {
-                                  final imgUrl = snapshot.data;
-
-                                  if (snapshot.connectionState == ConnectionState.waiting) {
-                                    return const CircleAvatar(
-                                      radius: 24,
-                                      backgroundColor: Colors.white10,
-                                      child: SizedBox(
-                                        width: 18, height: 18,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2, color: Colors.white70),
-                                      ),
-                                    );
-                                  }
-
-                                  if (imgUrl == null) {
-                                    return const CircleAvatar(
-                                      radius: 24,
-                                      backgroundColor: Colors.white24,
-                                      child: Icon(Icons.person, color: Colors.white70),
-                                    );
-                                  }
-
-                                  return CircleAvatar(
-                                    radius: 24,
-                                    backgroundColor: Colors.white10,
-                                    foregroundImage: NetworkImage(imgUrl),
-                                    child: const Icon(Icons.person, color: Colors.white70),
-                                  );
-                                },
-                              ),
-
-                        // ===== 中央：名前 =====
-                        title: Text(
-                          nickname,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                        ),
-
-                        // ===== 右側：メニュー（…） =====
-                        // 退会ユーザーにはメニューを出さない
-                        trailing: isDeleted
+                        leading: _buildLeadingAvatars(it),
+                        title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                        trailing: isGroup
                             ? null
                             : PopupMenuButton<String>(
                                 icon: const Icon(Icons.more_vert, color: Colors.white70),
                                 color: const Color(0xFF121212),
                                 onSelected: (value) async {
                                   if (value == 'block') {
-                                    final ok = await _confirmBlock(context, nickname);
+                                    final nick = title;
+                                    final ok = await _confirmBlock(context, nick);
                                     if (ok == true) {
-                                      final err = await _blockUser(widget.userId, userId!);
-                                      if (err == null) {
-                                        if (context.mounted) {
-                                          setState(() {
-                                            // 自分の一覧から非表示にする
-                                            matchedUsers.removeAt(index);
-                                          });
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            const SnackBar(content: Text('ブロックしました')),
-                                          );
-                                        }
-                                      } else {
-                                        if (context.mounted) {
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            SnackBar(content: Text(err)),
-                                          );
-                                        }
+                                      final err = await _blockUser(widget.userId, it.partnerUserId!);
+                                      if (err == null && context.mounted) {
+                                        setState(() => _items.removeAt(index));
+                                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ブロックしました')));
+                                      } else if (context.mounted && err != null) {
+                                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
                                       }
                                     }
                                   } else if (value == 'report') {
-                                    final ok = await _confirmReport(context, nickname);
+                                    final ok = await _confirmReport(context, title);
                                     if (ok == true) {
-                                      final err = await _reportUser(targetId: user['user_id']);
-                                      if (err == null) {
-                                        if (context.mounted) {
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            const SnackBar(content: Text('通報しました')),
-                                          );
-                                        }
-                                      } else {
-                                        if (context.mounted) {
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            SnackBar(content: Text(err)),
-                                          );
-                                        }
+                                      final err = await _reportUser(targetId: it.partnerUserId!);
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(content: Text(err == null ? '通報しました' : err)),
+                                        );
                                       }
                                     }
                                   }
                                 },
-                                itemBuilder: (ctx) => [
-                                  PopupMenuItem(
-                                    value: 'block',
-                                    child: Row(
-                                      children: const [
-                                        Icon(Icons.block, color: Colors.redAccent, size: 20),
-                                        SizedBox(width: 10),
-                                        Text('ブロック', style: TextStyle(color: Colors.white)),
-                                      ],
-                                    ),
-                                  ),
-                                  PopupMenuItem(
-                                    value: 'report',
-                                    child: Row(
-                                      children: const [
-                                        Icon(Icons.flag_outlined, color: Colors.orangeAccent, size: 20),
-                                        SizedBox(width: 10),
-                                        Text('通報する', style: TextStyle(color: Colors.white)),
-                                      ],
-                                    ),
-                                  ),
+                                itemBuilder: (ctx) => const [
+                                  PopupMenuItem(value: 'block', child: Row(children: [
+                                    Icon(Icons.block, color: Colors.redAccent, size: 20), SizedBox(width: 10),
+                                    Text('ブロック', style: TextStyle(color: Colors.white)),
+                                  ])),
+                                  PopupMenuItem(value: 'report', child: Row(children: [
+                                    Icon(Icons.flag_outlined, color: Colors.orangeAccent, size: 20), SizedBox(width: 10),
+                                    Text('通報する', style: TextStyle(color: Colors.white)),
+                                  ])),
                                 ],
                               ),
-
-                        // ===== タップでチャットへ =====
                         onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => ChatScreen(
+                          if (isGroup) {
+                            Navigator.push(context, MaterialPageRoute(
+                              builder: (_) => ChatScreen(
                                 currentUserId: widget.userId,
-                                matchedUserId: userId ?? '__deleted__',
-                                matchedUserNickname: nickname,
+                                matchedUserId: '__group__',
+                                matchedUserNickname: title,
+                                headerMode: MatchMode.double,
+                                conversationId: it.conversationId, // ★グループは会話IDで開く
                               ),
-                            ),
-                          );
+                            ));
+                          } else {
+                            Navigator.push(context, MaterialPageRoute(
+                              builder: (_) => ChatScreen(
+                                currentUserId: widget.userId,
+                                matchedUserId: it.partnerUserId!,
+                                matchedUserNickname: title,
+                                headerMode: MatchMode.single,
+                              ),
+                            ));
+                          }
                         },
-
-                        // 任意：ロングタップでもメニューを開けるように
-                        onLongPress: isDeleted
-                            ? null
-                            : () {
-                                // PopupMenu を開く簡易実装：trailingをタップしてね、でもOK
-                                // 高度にやるなら GlobalKey でメニューを開く処理を追加
-                              },
                       );
                     },
                   ),

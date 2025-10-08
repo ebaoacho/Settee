@@ -590,44 +590,84 @@ def recent_users(request, current_user_id):
 @api_view(['GET'])
 def matched_users(request, current_user_id):
     try:
-        # --- 相互Like ---
-        sent_likes = LikeAction.objects.filter(
-            sender__user_id=current_user_id
-        ).values_list('receiver__user_id', flat=True)
+        me = UserProfile.objects.get(user_id=current_user_id)
 
-        received_likes = LikeAction.objects.filter(
-            receiver__user_id=current_user_id
-        ).values_list('sender__user_id', flat=True)
+        # --- ブロック集合（片/両方向） ---
+        blocked_outgoing = set(
+            Block.objects.filter(blocker=me)
+            .values_list('blocked__user_id', flat=True)
+        )
+        blocked_incoming = set(
+            Block.objects.filter(blocked=me)
+            .values_list('blocker__user_id', flat=True)
+        )
+        blocked_any = blocked_outgoing | blocked_incoming
 
-        matched_ids = set(sent_likes).intersection(set(received_likes))
+        # --- 相互Like（ブロック除外） ---
+        sent = set(
+            LikeAction.objects.filter(sender=me)
+            .exclude(receiver__user_id__in=blocked_any)
+            .values_list('receiver__user_id', flat=True)
+        )
+        received = set(
+            LikeAction.objects.filter(receiver=me)
+            .exclude(sender__user_id__in=blocked_any)
+            .values_list('sender__user_id', flat=True)
+        )
+        mutual_like_ids = sent & received
 
-        # --- 会話の共同参加者（新ロジック）---
-        conv_ids = (ConversationMember.objects
-                    .filter(user__user_id=current_user_id, left_at__isnull=True)
-                    .values_list('conversation_id', flat=True))
+        # --- ダブル会話の「初期ペア相手」だけを抽出 ---
+        double_partner_ids = set()
+        double_convs = (
+            Conversation.objects
+            .filter(
+                kind=ConversationKind.DOUBLE,
+                members__user=me,
+                members__left_at__isnull=True,
+            )
+            .select_related('matched_pair_a', 'matched_pair_b')
+            .distinct()
+        )
 
-        co_member_ids = set(ConversationMember.objects
-            .filter(conversation_id__in=conv_ids, left_at__isnull=True)
-            .exclude(user__user_id=current_user_id)
-            .values_list('user__user_id', flat=True))
+        for conv in double_convs:
+            a = getattr(conv.matched_pair_a, 'user_id', None)
+            b = getattr(conv.matched_pair_b, 'user_id', None)
 
-        partner_ids = matched_ids.union(co_member_ids)
+            # 初期ペアのどちらかがブロック関係ならスキップ
+            if (a in blocked_any) or (b in blocked_any):
+                continue
+
+            if a == current_user_id and b:
+                double_partner_ids.add(b)
+            elif b == current_user_id and a:
+                double_partner_ids.add(a)
+            else:
+                # 自分が招待参加（a/b に含まれない）でも、
+                # 一覧は“初期ペア”のどちらか1名（≠自分）だけを代表として載せる
+                if a and a != current_user_id:
+                    double_partner_ids.add(a)
+                elif b and b != current_user_id:
+                    double_partner_ids.add(b)
+
+        # --- 最終候補 = 相互Like ∪ ダブル初期ペア相手（共同参加者は含めない） ---
+        partner_ids = (mutual_like_ids | double_partner_ids) - blocked_any
         partner_ids.discard(current_user_id)
 
-        # --- 片方向ブロック（自分がブロックした相手は隠す）---
-        blocked_outgoing = set(Block.objects.filter(
-            blocker__user_id=current_user_id
-        ).values_list('blocked__user_id', flat=True))
-
-        visible_partner_ids = partner_ids - blocked_outgoing
-
-        users = UserProfile.objects.filter(user_id__in=visible_partner_ids)
+        users = (
+            UserProfile.objects
+            .filter(user_id__in=partner_ids)
+            .only('user_id', 'nickname')
+            .order_by('nickname')
+        )
         result = [{'user_id': u.user_id, 'nickname': u.nickname} for u in users]
         return Response(result, status=200)
 
+    except UserProfile.DoesNotExist:
+        # 未登録などは空配列
+        return Response([], status=200)
     except Exception as e:
         return Response({'error': str(e)}, status=500)
-
+    
 @api_view(['GET'])
 def get_unread_matches(request, user_id):
     try:
@@ -788,6 +828,10 @@ def get_messages(request, user1_id, user2_id):
             .filter(members__user=u2)
             .distinct()
             .first())
+    
+    is_active_member = ConversationMember.objects.filter(
+        conversation=conv, user=u1, left_at__isnull=True
+    ).exists()
     if not conv:
         return Response([], status=200)
 
@@ -930,7 +974,7 @@ def invite_to_conversation(request):
     except (TypeError, ValueError):
         return Response({'error': 'INVALID_CONVERSATION_ID'}, status=400)
 
-    # ユーザ解決は例外をきちんと 404 返す
+    # ユーザー解決
     try:
         inviter = UserProfile.objects.get(user_id=inviter_id)
         invitee = UserProfile.objects.get(user_id=invitee_id)
@@ -938,47 +982,70 @@ def invite_to_conversation(request):
         return Response({'error': 'USER_NOT_FOUND'}, status=404)
 
     try:
-        # ★ ここからトランザクション内で select_for_update を使う
         with transaction.atomic():
+            # 会話ロック
             conv = Conversation.objects.select_for_update().get(id=cid)
-
-            # Double 以外はエラー（仕様に合わせて）
             if conv.kind != ConversationKind.DOUBLE:
                 return Response({'error': 'WRONG_KIND'}, status=400)
 
-            # 招待操作権限の検証（有効メンバーのみ）
-            is_member = ConversationMember.objects.filter(
+            # 招待者は有効メンバーであること
+            if not ConversationMember.objects.filter(
                 conversation=conv, user=inviter, left_at__isnull=True
-            ).exists()
-            if not is_member:
+            ).exists():
                 return Response({'error': 'FORBIDDEN'}, status=403)
 
-            # 既に入っていれば冪等に 200 を返す（left_at があれば復帰）
-            cm, created = ConversationMember.objects.get_or_create(
-                conversation=conv, user=invitee, defaults={'role': 'member'}
-            )
-            if not created and cm.left_at is not None:
-                cm.left_at = None
-                cm.save(update_fields=['left_at'])
-
-            # 上限（4人想定）チェックは「追加後」に再カウントして超過ならエラー返す
-            active_count = ConversationMember.objects.filter(
+            # 既存の有効メンバーをロック付きで取得
+            active_qs = ConversationMember.objects.select_for_update().filter(
                 conversation=conv, left_at__isnull=True
-            ).count()
-            if active_count > 4:
+            )
+            active_ids = list(active_qs.values_list('user_id', flat=True))
+
+            # 既に invitee が在籍しているか
+            invitee_is_already_member = invitee.id in active_ids
+
+            # 上限チェック（すでに在籍していればOK、未在籍なら空きが必要）
+            MAX_MEMBERS = 4
+            if not invitee_is_already_member and active_qs.count() >= MAX_MEMBERS:
                 return Response({'error': 'MEMBER_LIMIT_REACHED'}, status=409)
 
-            members = list(ConversationMember.objects
-                .filter(conversation=conv, left_at__isnull=True)
-                .values_list('user__user_id', flat=True))
+            # ブロック関係の拒否（招待者↔招待客、既存メンバー↔招待客 のいずれかがブロック）
+            if Block.objects.filter(
+                models.Q(blocker=inviter, blocked=invitee) |
+                models.Q(blocker=invitee, blocked=inviter) |
+                models.Q(blocker__in=active_ids, blocked=invitee.id) |
+                models.Q(blocker=invitee.id, blocked__in=active_ids)
+            ).exists():
+                return Response({'error': 'BLOCKED_RELATION'}, status=403)
+
+            # 追加 or 復帰（★ invited_by を記録）
+            cm, created = ConversationMember.objects.get_or_create(
+                conversation=conv, user=invitee,
+                defaults={'role': 'member', 'invited_by': inviter}
+            )
+            updates = []
+            if cm.left_at is not None:
+                cm.left_at = None
+                updates.append('left_at')
+            if cm.invited_by_id is None:
+                cm.invited_by = inviter
+                updates.append('invited_by')
+            if updates:
+                cm.save(update_fields=updates)
+
+            # 返却：誰が誰を招待したかが分かるよう invited_by を含める
+            members_qs = conv.members.select_related('user', 'invited_by').filter(left_at__isnull=True)
+            members = [{
+                'user_id':    m.user.user_id,
+                'nickname':   m.user.nickname,
+                'role':       m.role,
+                'invited_by': (m.invited_by.user_id if m.invited_by_id else None),
+            } for m in members_qs]
 
         return Response({'id': conv.id, 'kind': conv.kind, 'members': members}, status=200)
 
     except Conversation.DoesNotExist:
         return Response({'error': 'CONV_NOT_FOUND'}, status=404)
-    except Exception as e:
-        # 本番では stacktrace をログに出す（Sentry 等）
-        # logger.exception('invite_to_conversation failed')
+    except Exception:
         return Response({'error': 'SERVER_ERROR'}, status=500)
 
 # ------------- 新規: 会話一覧（ユーザ別） -------------
@@ -1210,6 +1277,13 @@ def block_user(request):
 
     # 片方向のみ削除（blocker→blocked の Like だけ削除）
     LikeAction.objects.filter(sender=blocker, receiver=blocked).delete()
+
+    now = timezone.now()
+    ConversationMember.objects.filter(
+        user=blocker,
+        left_at__isnull=True,
+        conversation__members__user=blocked  # blocker と blocked が同じ会話にいる
+    ).update(left_at=now)
 
     return Response({'message': 'ブロックしました'}, status=200)
 

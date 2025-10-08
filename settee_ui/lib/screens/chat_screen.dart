@@ -261,7 +261,7 @@ class _InvitePlaceholder extends StatelessWidget {
                   color: Colors.white,
                   fontWeight: FontWeight.w800,
                   height: 1.15,
-                  fontSize: size * 0.12, // 相対フォント
+                  fontSize: size * 0.09, // 相対フォント
                 ),
               ),
             ),
@@ -442,10 +442,12 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _partnerAvatarUrl;
   Timer? _timer;
 
+  final Map<String, String?> _avatarCache = {};
+
   @override
   void initState() {
     super.initState();
-    _loadAvatars();
+    _prefetchAvatars();
     fetchMessages();
     // 5秒ごとにポーリング
     _timer = Timer.periodic(const Duration(seconds: 5), (timer) {
@@ -481,29 +483,75 @@ class _ChatScreenState extends State<ChatScreen> {
     return null;
   }
 
-  Future<void> _loadAvatars() async {
-    try {
-      final meF    = _resolveFirstAvatarUrl(widget.currentUserId);
-      final otherF = _resolveFirstAvatarUrl(widget.matchedUserId);
-      final meUrl    = await meF;
-      final otherUrl = await otherF;
-      if (!mounted) return;
-      setState(() {
-        _selfAvatarUrl    = meUrl;
-        _partnerAvatarUrl = otherUrl;
-      });
-    } catch (e) {
-      debugPrint('avatar load error: $e');
+
+  // キャッシュに無ければ読み込む
+  Future<void> _ensureAvatarLoaded(String userId) async {
+    if (_avatarCache.containsKey(userId)) return;
+    final url = await _resolveFirstAvatarUrl(userId);
+    if (!mounted) return;
+    setState(() => _avatarCache[userId] = url);
+  }
+
+  // シングル/ダブルに応じて事前に参加者をプリフェッチ
+  Future<void> _prefetchAvatars() async {
+    // 自分 & 1:1の相手
+    await Future.wait([
+      _ensureAvatarLoaded(widget.currentUserId),
+      _ensureAvatarLoaded(widget.matchedUserId),
+    ]);
+
+    // ダブルマッチなら会話メンバーも事前読込（会話一覧APIからメンバー取得）
+    if (widget.headerMode == MatchMode.double && widget.conversationId != null) {
+      try {
+        final uri = Uri.parse('https://settee.jp/conversations/user/${widget.currentUserId}/');
+        final res = await http.get(uri).timeout(const Duration(seconds: 10));
+        if (res.statusCode == 200) {
+          final items = jsonDecode(utf8.decode(res.bodyBytes)) as List;
+          final me = widget.currentUserId;
+          final cid = widget.conversationId.toString();
+          for (final it in items) {
+            if ('${it['id']}' != cid) continue;
+            final members = (it['members'] as List?)?.map((e) => e.toString()).toList() ?? const [];
+            for (final uid in members) {
+              // 自分含む全員をキャッシュ
+              await _ensureAvatarLoaded(uid);
+            }
+            break;
+          }
+        }
+      } catch (_) {/* 無視 */}
     }
   }
 
+  // 新着メッセージに含まれる送信者も都度ウォームアップ
+  Future<void> _warmAvatarCacheFromMessages(List<dynamic> msgs) async {
+    final ids = <String>{};
+    for (final m in msgs) {
+      final sid = '${m['sender']}';
+      if (sid.isNotEmpty) ids.add(sid);
+    }
+    await Future.wait(ids.map(_ensureAvatarLoaded));
+  }
+
+
   Future<void> fetchMessages() async {
     try {
-      final response = await http.get(Uri.parse(
-        'https://settee.jp/messages/${widget.currentUserId}/${widget.matchedUserId}/',
-      ));
-      if (response.statusCode == 200) {
-        setState(() => messages = json.decode(response.body));
+      if (widget.headerMode == MatchMode.double && widget.conversationId != null) {
+        final uri = Uri.parse('https://settee.jp/conversations/${widget.conversationId}/messages/');
+        final res = await http.get(uri);
+        if (res.statusCode == 200) {
+          final list = json.decode(utf8.decode(res.bodyBytes)) as List<dynamic>;
+          setState(() => messages = list);
+          _warmAvatarCacheFromMessages(list);
+        }
+      } else {
+        final uri = Uri.parse('https://settee.jp/messages/${widget.currentUserId}/${widget.matchedUserId}/');
+        final res = await http.get(uri);
+        if (res.statusCode == 200) {
+          final list = json.decode(utf8.decode(res.bodyBytes)) as List<dynamic>;
+          setState(() => messages = list);
+          _warmAvatarCacheFromMessages(list);
+        }
       }
     } catch (e) {
       debugPrint('メッセージ取得エラー: $e');
@@ -512,18 +560,38 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> sendMessage(String text) async {
     try {
-      final response = await http.post(
-        Uri.parse('https://settee.jp/messages/send/'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'sender': widget.currentUserId,
-          'receiver': widget.matchedUserId,
-          'text': text,
-        }),
-      );
-      if (response.statusCode == 201) {
-        _controller.clear();
-        fetchMessages();
+      if (widget.headerMode == MatchMode.double && widget.conversationId != null) {
+        // Double: /conversations/<id>/messages/send/
+        final uri = Uri.parse('https://settee.jp/conversations/${widget.conversationId}/messages/send/');
+        final res = await http.post(
+          uri,
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({'sender': widget.currentUserId, 'text': text}),
+        );
+        if (res.statusCode == 201) {
+          _controller.clear();
+          fetchMessages();
+        } else {
+          debugPrint('送信失敗(double): ${res.statusCode} ${res.body}');
+        }
+      } else {
+        // Single: /messages/send/
+        final uri = Uri.parse('https://settee.jp/messages/send/');
+        final res = await http.post(
+          uri,
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({
+            'sender': widget.currentUserId,
+            'receiver': widget.matchedUserId,
+            'text': text,
+          }),
+        );
+        if (res.statusCode == 201) {
+          _controller.clear();
+          fetchMessages();
+        } else {
+          debugPrint('送信失敗(single): ${res.statusCode} ${res.body}');
+        }
       }
     } catch (e) {
       debugPrint('送信エラー: $e');
@@ -576,12 +644,12 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     final self = MatchUser(
       userId: widget.currentUserId,
-      avatarUrl: _selfAvatarUrl,
+      avatarUrl: _avatarCache[widget.currentUserId],
       displayName: 'あなた',
     );
     final partner = MatchUser(
       userId: widget.matchedUserId,
-      avatarUrl: _partnerAvatarUrl,
+      avatarUrl: _avatarCache[widget.matchedUserId],
       displayName: widget.matchedUserNickname,
     );
 
@@ -620,31 +688,52 @@ class _ChatScreenState extends State<ChatScreen> {
                     itemCount: messages.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 8),
                     itemBuilder: (context, index) {
-                      final message = messages[index]; // 先頭=古い
-                      final isMe = message['sender'].toString() == widget.currentUserId;
+                      final message = messages[index];
+                      final senderId = '${message['sender']}';
+                      final isMe = senderId == widget.currentUserId;
+                      final text = (message['text'] ?? '').toString();
 
-                      return Align(
-                        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-                        child: Container(
-                          constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.7),
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          decoration: BoxDecoration(
-                            color: isMe ? Colors.blueAccent : Colors.grey[300],
-                            borderRadius: BorderRadius.only(
-                              topLeft: const Radius.circular(12),
-                              topRight: const Radius.circular(12),
-                              bottomLeft: isMe ? const Radius.circular(12) : const Radius.circular(0),
-                              bottomRight: isMe ? const Radius.circular(0) : const Radius.circular(12),
-                            ),
-                          ),
-                          child: Text(
-                            message['text'] ?? '',
-                            style: TextStyle(
-                              color: isMe ? Colors.white : Colors.black,
-                              fontSize: 15,
-                            ),
+                      // 小さめの丸アイコン（左側に表示）
+                      Widget smallAvatar(String? url) => Container(
+                        width: 26, height: 26,
+                        margin: const EdgeInsets.only(right: 6), // バブルとの間隔
+                        decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF444444)),
+                        clipBehavior: Clip.antiAlias,
+                        child: (url == null || url.isEmpty)
+                            ? const Icon(Icons.person, color: Colors.white70, size: 16)
+                            : Image.network(url, fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => const Icon(Icons.person, color: Colors.white70, size: 16)),
+                      );
+
+                      // バブル（最大幅=画面の50% → 画面中央で折り返しやすい）
+                      final maxW = MediaQuery.of(context).size.width * 0.50;
+                      final bubble = Container(
+                        constraints: BoxConstraints(maxWidth: maxW),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: isMe ? Colors.blueAccent : Colors.grey[300],
+                          borderRadius: BorderRadius.only(
+                            topLeft: const Radius.circular(12),
+                            topRight: const Radius.circular(12),
+                            bottomLeft: isMe ? const Radius.circular(12) : const Radius.circular(0),
+                            bottomRight: isMe ? const Radius.circular(0) : const Radius.circular(12),
                           ),
                         ),
+                        child: Text(
+                          text,
+                          softWrap: true,
+                          style: TextStyle(color: isMe ? Colors.white : Colors.black, fontSize: 15),
+                        ),
+                      );
+
+                      // 行：左にアイコン→バブル（自分の発言はバブルのみ、右寄せ）
+                      return Row(
+                        mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+                        crossAxisAlignment: CrossAxisAlignment.end, // ← バブルとアイコンの下辺を揃える
+                        children: [
+                          if (!isMe) smallAvatar(_avatarCache[senderId]),
+                          bubble,
+                        ],
                       );
                     },
                   ),
