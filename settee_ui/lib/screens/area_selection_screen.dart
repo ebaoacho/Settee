@@ -262,6 +262,15 @@ class _AreaSelectionScreenState extends State<AreaSelectionScreen> {
     );
   }
 
+  Route<T> _noAnimRoute<T>(Widget page) => PageRouteBuilder<T>(
+    pageBuilder: (_, __, ___) => page,
+    transitionDuration: Duration.zero,
+    reverseTransitionDuration: Duration.zero,
+    transitionsBuilder: (_, __, ___, child) => child,
+    maintainState: false, // 前画面を保持しない（→ タイマー等は dispose される）
+    opaque: true,
+  );
+
   Widget _buildBottomNavigationBar(BuildContext context) {
     return Container(
       height: 60,
@@ -274,18 +283,18 @@ class _AreaSelectionScreenState extends State<AreaSelectionScreen> {
         children: [
           GestureDetector(
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => ProfileBrowseScreen(currentUserId: widget.userId)),
+              Navigator.of(context).pushAndRemoveUntil(
+                _noAnimRoute(ProfileBrowseScreen(currentUserId: widget.userId)),
+                (route) => false,
               );
             },
             child: const Icon(Icons.home, color: Colors.black),
           ),
           GestureDetector(
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => DiscoveryScreen(userId: widget.userId)),
+              Navigator.of(context).pushAndRemoveUntil(
+                _noAnimRoute(DiscoveryScreen(userId: widget.userId)),
+                (route) => false,
               );
             },
             child: const Icon(Icons.search, color: Colors.black),
@@ -293,18 +302,18 @@ class _AreaSelectionScreenState extends State<AreaSelectionScreen> {
           Image.asset('assets/logo_text.png', width: 70),
           GestureDetector(
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => MatchedUsersScreen(userId: widget.userId)),
+              Navigator.of(context).pushAndRemoveUntil(
+                _noAnimRoute(MatchedUsersScreen(userId: widget.userId)),
+                (route) => false,
               );
             },
             child: const Icon(Icons.mail_outline, color: Colors.black),
           ),
           GestureDetector(
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => UserProfileScreen(userId: widget.userId)),
+              Navigator.of(context).pushAndRemoveUntil(
+                _noAnimRoute(UserProfileScreen(userId: widget.userId)),
+                (route) => false,
               );
             },
             child: const Icon(Icons.person_outline, color: Colors.black),

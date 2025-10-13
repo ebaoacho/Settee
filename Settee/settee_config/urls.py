@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import path
-from settee_app.views import register_user, login_user, upload_user_image, recommended_users, like_user, get_user_profile, popular_users, recent_users, matched_users, send_message, get_messages, get_available_dates,  update_available_dates, get_selected_areas, update_selected_areas, update_match_multiple, update_user_profile, health_check, serve_image, delete_account, block_user, report_user, admin_issue_token, admin_list_images_for_user, admin_delete_image, admin_users_by_reports, admin_ban_user, admin_user_ids, user_tickets, exchange_ticket, use_ticket, get_user_entitlements, liked_users, change_email, change_phone, toggle_reviewed, admin_reports_list, admin_report_mark_read, admin_user_reports_read_all, upload_admin_user_image, serve_kyc_image, admin_kyc_list_images_for_user, admin_kyc_delete_image, admin_kyc_toggle_reviewed, admin_kyc_delete_user, received_likes, start_double_match, invite_to_conversation, list_conversations_for_user, send_message_to_conversation, get_conversation_messages, get_unread_matches, match, update_read_match, add_settee_points
+from settee_app.views import register_user, login_user, upload_user_image, recommended_users, like_user, get_user_profile, popular_users, recent_users, matched_users, send_message, get_messages, get_available_dates,  update_available_dates, get_selected_areas, update_selected_areas, update_match_multiple, update_user_profile, health_check, serve_image, delete_account, block_user, report_user, admin_issue_token, admin_list_images_for_user, admin_delete_image, admin_users_by_reports, admin_ban_user, admin_user_ids, user_tickets, exchange_ticket, use_ticket, get_user_entitlements, liked_users, change_email, change_phone, toggle_reviewed, admin_reports_list, admin_report_mark_read, admin_user_reports_read_all, upload_admin_user_image, serve_kyc_image, admin_kyc_list_images_for_user, admin_kyc_delete_image, admin_kyc_toggle_reviewed, admin_kyc_delete_user, received_likes, start_double_match, invite_to_conversation, list_conversations_for_user, send_message_to_conversation, get_conversation_messages, get_unread_matches, match, update_read_match, add_settee_points, ios_verify_receipt, app_store_notifications
 from django.conf import settings
 from django.conf.urls.static import static
 
@@ -67,6 +67,12 @@ urlpatterns = [
 
     # KYC タブからの管理者削除
     path('admin/kyc/users/<str:user_id>/delete/', admin_kyc_delete_user, name='admin_kyc_delete_user'),
+    
+    # IAP: レシート検証→権限更新
+    path('iap/ios/verify/', ios_verify_receipt, name='ios_verify_receipt'),
+
+    # App Store通知 受信
+    path('iap/app-store/notifications/', app_store_notifications, name='app_store_notifications'),
 ]
 
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

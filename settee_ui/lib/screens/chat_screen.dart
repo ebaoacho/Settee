@@ -30,6 +30,8 @@ class MatchBanner extends StatefulWidget {
   final MatchUser partner;
   final MatchUser? myInvitee;
   final MatchUser? partnerInvitee;
+  final MatchUser? selfOwner;
+  final bool selfIsOwner;
   final Future<bool> Function(String inviteeUserId)? onInvite; // nullなら招待UIは出さない
 
   const MatchBanner({
@@ -37,8 +39,10 @@ class MatchBanner extends StatefulWidget {
     required this.mode,
     required this.self,
     required this.partner,
+    required this.selfIsOwner,
     this.myInvitee,
     this.partnerInvitee,
+    this.selfOwner,
     this.onInvite,
   });
 
@@ -75,6 +79,20 @@ class _MatchBannerState extends State<MatchBanner> {
     _myInvitee = widget.myInvitee;
     _partnerInvitee = widget.partnerInvitee;
     _loadAspect();
+  }
+
+  @override
+  void didUpdateWidget(covariant MatchBanner oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 親からの更新を必ず反映（setState不要。buildが呼ばれるタイミングで参照が更新されます）
+    _myInvitee = widget.myInvitee;
+    _partnerInvitee = widget.partnerInvitee;
+
+    // // デバッグ
+    // debugPrint('[Banner] didUpdateWidget: '
+    //     'myInvitee=${_myInvitee?.userId} '
+    //     'partnerInvitee=${_partnerInvitee?.userId}');
+    if (oldWidget.mode != widget.mode) _loadAspect();
   }
 
   Future<void> _loadAspect() async {
@@ -170,7 +188,9 @@ class _MatchBannerState extends State<MatchBanner> {
           partner: widget.partner,
           myInvitee: _myInvitee,
           partnerInvitee: _partnerInvitee,
-          onInviteTap: _openInviteDialog,
+          selfIsOwner: widget.selfIsOwner,
+          selfOwner: widget.selfOwner ?? widget.self,      // 非オーナー時は“招待してくれたオーナー”を受け取る
+          onInviteTap: widget.selfIsOwner ? _openInviteDialog : null, // 非オーナーは＋ボタン無効
         );
       case MatchMode.single:
         return _SingleOverlay(
@@ -326,10 +346,11 @@ class _DottedCirclePainter extends CustomPainter {
 }
 
 // ========== Double / Single のオーバーレイ実装 ==========
-
 class _DoubleOverlay extends StatelessWidget {
   final MatchUser self, partner;
   final MatchUser? myInvitee, partnerInvitee;
+  final bool selfIsOwner;
+  final MatchUser? selfOwner;   // 自分サイドのオーナー（非オーナー時=招待者）
   final VoidCallback? onInviteTap;
 
   const _DoubleOverlay({
@@ -337,6 +358,8 @@ class _DoubleOverlay extends StatelessWidget {
     required this.partner,
     required this.myInvitee,
     required this.partnerInvitee,
+    required this.selfIsOwner,
+    required this.selfOwner,
     required this.onInviteTap,
   });
 
@@ -345,44 +368,52 @@ class _DoubleOverlay extends StatelessWidget {
     return LayoutBuilder(builder: (ctx, c) {
       final d = c.maxWidth * _MatchBannerState._doubleAvatarDiameterFrac;
 
-      return Stack(children: [
-        // 固定アバター
-        _at(_AvatarCircle(url: self.avatarUrl, size: d), _MatchBannerState._doublePositions['self']!),
-        _at(_AvatarCircle(url: partner.avatarUrl, size: d), _MatchBannerState._doublePositions['partner']!),
+      // --- 上段 ---
+      // 左上：常に「自分を招待していない方のオーナー」＝ partner
+      final leftTop = _AvatarCircle(url: partner.avatarUrl, size: d);
 
-        // 相手側の招待スロット：未招待なら「○○さんの素敵な友だちを待とう」
-        if (partnerInvitee != null)
-          _at(_AvatarCircle(url: partnerInvitee!.avatarUrl, size: d), _MatchBannerState._doublePositions['partnerFriend']!)
-        else
-          _at(
-            _InvitePlaceholder(
+      // 右上：そのオーナーが招待した人（必ず誰かいる前提。いない場合はプレースホルダ）
+      final rightTop = (partnerInvitee != null)
+          ? _AvatarCircle(url: partnerInvitee!.avatarUrl, size: d)
+          : _InvitePlaceholder(
               message: '${partner.displayName ?? "相手"}さんの素敵な\n友だちを待とう',
-              size: d,
-              showPlus: false,
-            ),
-            _MatchBannerState._doublePositions['partnerFriend']!,
-          ),
+              size: d, showPlus: false);
 
-        // 自分側の招待スロット：未招待なら「あなたの友だちを招待しよう」＋ボタン
-        if (myInvitee != null)
-          _at(_AvatarCircle(url: myInvitee!.avatarUrl, size: d), _MatchBannerState._doublePositions['myFriend']!)
-        else
-          _at(
-            _InvitePlaceholder(
-              message: 'あなたの友だちを\n招待しよう',
-              size: d,
-              showPlus: true,
-              onPlus: onInviteTap,
-            ),
-            _MatchBannerState._doublePositions['myFriend']!,
-          ),
+      // --- 下段 ---
+      // 左下：自分サイドのオーナー
+      //  - オーナー時   → 自分
+      //  - 非オーナー時 → 自分を招待したオーナー
+      final leftBottomOwner = _AvatarCircle(
+        url: (selfIsOwner ? self : (selfOwner ?? self)).avatarUrl,
+        size: d,
+      );
+
+      // 右下：
+      //  - オーナー時   → 自分が招待した人（＋ボタン可）
+      //  - 非オーナー時 → 自分（あなた）
+      final rightBottom = selfIsOwner
+          ? (myInvitee != null
+              ? _AvatarCircle(url: myInvitee!.avatarUrl, size: d)
+              : _InvitePlaceholder(
+                  message: 'あなたの友だちを\n招待しよう',
+                  size: d,
+                  showPlus: onInviteTap != null,
+                  onPlus: onInviteTap,
+                ))
+          : _AvatarCircle(url: self.avatarUrl, size: d);
+
+      return Stack(children: [
+        _at(leftTop,       _MatchBannerState._doublePositions['partner']!),
+        _at(rightTop,      _MatchBannerState._doublePositions['partnerFriend']!),
+        _at(leftBottomOwner,_MatchBannerState._doublePositions['self']!),
+        _at(rightBottom,   _MatchBannerState._doublePositions['myFriend']!),
       ]);
     });
   }
 
   Widget _at(Widget child, Offset frac) => Positioned.fill(
-        child: Align(alignment: Alignment(-1 + 2 * frac.dx, -1 + 2 * frac.dy), child: child),
-      );
+    child: Align(alignment: Alignment(-1 + 2*frac.dx, -1 + 2*frac.dy), child: child),
+  );
 }
 
 class _SingleOverlay extends StatelessWidget {
@@ -414,7 +445,7 @@ class ChatScreen extends StatefulWidget {
   final String currentUserId;
   final String matchedUserId;
   final String matchedUserNickname;
-
+  final String? partnerSoloName; 
   // 追加：会話ID（あれば招待APIを叩く）
   final int? conversationId;
 
@@ -426,6 +457,7 @@ class ChatScreen extends StatefulWidget {
     required this.currentUserId,
     required this.matchedUserId,
     required this.matchedUserNickname,
+    this.partnerSoloName,
     this.conversationId,
     this.headerMode = MatchMode.single,
   });
@@ -437,33 +469,285 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   List<dynamic> messages = [];
   final TextEditingController _controller = TextEditingController();
-
-  String? _selfAvatarUrl;
-  String? _partnerAvatarUrl;
+  void _log(String msg) => debugPrint('[Chat] $msg'); 
+  void _logAva(String msg) => debugPrint('[Avatar] $msg');
+  MatchUser? _myInviteeUser;
+  MatchUser? _partnerInviteeUser;
+  MatchUser? _selfOwnerUser;     // 自分サイドのオーナー（自分がオーナーなら自分、非オーナーなら招待者）
+  MatchUser? _partnerOwnerUser;  // 相手サイドのオーナー（左上に出す人）
   Timer? _timer;
+  bool _selfIsOwner = true;
 
   final Map<String, String?> _avatarCache = {};
+
+  void _startPolling() {
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(seconds: 5), (t) {
+      // 画面が破棄済み or 最前面でなければ停止
+      final isCurrent = ModalRoute.of(context)?.isCurrent ?? false;
+      if (!mounted || !isCurrent) {
+        // debugPrint('[Chat] stop poll (not current or unmounted)');
+        t.cancel();
+        _timer = null;
+        return;
+      }
+      fetchMessages();
+    });
+  }
+
+  void _stopPolling() {
+    if (_timer != null) {
+      // debugPrint('[Chat] stop poll (explicit)');
+      _timer?.cancel();
+      _timer = null;
+    }
+  }
 
   @override
   void initState() {
     super.initState();
     _prefetchAvatars();
     fetchMessages();
-    // 5秒ごとにポーリング
-    _timer = Timer.periodic(const Duration(seconds: 5), (timer) {
-      fetchMessages();
-    });
+    _loadDoubleContext();
+    _startPolling();
+  }
+
+  // ほか画面に遷移した瞬間でも止める
+  @override
+  void deactivate() {
+    _stopPolling();
+    super.deactivate();
   }
 
   @override
   void dispose() {
-    _timer?.cancel(); // タイマーを停止してメモリリークを防ぐ
+    _stopPolling();
     _controller.dispose();
     super.dispose();
   }
 
-  // ---- 1枚目アバターURLを“できるだけ確実に”返す（HEAD→GET Range）
+  // invited_by などがオブジェクト/文字列どちらでも user_id を抜けるように
+  String _uidFrom(dynamic v) {
+    if (v == null) return '';
+    if (v is String) return v;
+    if (v is Map) {
+      final a = (v['user_id'] ?? v['uid'] ?? v['username'] ?? '').toString();
+      return a;
+    }
+    return '';
+  }
+
+  // 追加：Map から user_id を安全に抜く
+  String _pickUserId(Map m) {
+    final a = _uidFrom(m['user_id']);          // 文字列 or Map 両対応
+    if (a.isNotEmpty) return a;
+    return _uidFrom(m['user']);                // 予備
+  }
+
+Future<void> _loadDoubleContext() async {
+  if (widget.headerMode != MatchMode.double || widget.conversationId == null) return;
+
+  Future<List> _fetchMembersDetail() async {
+    final tried = <Uri>[
+      Uri.parse('https://settee.jp/conversations/${widget.conversationId}/detail/'),
+      Uri.parse('https://settee.jp/conversations/${widget.conversationId}/members/'),
+    ];
+    for (final uri in tried) {
+      try {
+        final res = await http.get(uri).timeout(const Duration(seconds: 10));
+        if (res.statusCode == 200) {
+          final body = jsonDecode(utf8.decode(res.bodyBytes));
+          if (body is Map && body['members'] is List) return body['members'];
+          if (body is List) return body;
+        } else {
+          // debugPrint('[Chat] members fetch failed code=${res.statusCode}');
+        }
+      } catch (e) {
+        // debugPrint('[Chat] members fetch error=$e');
+      }
+    }
+    // ★ フォールバック：自分の会話一覧から該当会話を探して members を使う
+    try {
+      final uri = Uri.parse('https://settee.jp/conversations/user/${widget.currentUserId}/');
+      final res = await http.get(uri).timeout(const Duration(seconds: 10));
+      if (res.statusCode == 200) {
+        final List list = jsonDecode(utf8.decode(res.bodyBytes));
+        for (final it in list) {
+          final id = (it['id'] is int) ? it['id'] : int.tryParse('${it['id']}');
+          if (id == widget.conversationId) {
+            final m = it['members'];
+            if (m is List) return m;
+          }
+        }
+      }
+    } catch (e) {
+      // debugPrint('[Chat] fallback members error=$e');
+    }
+    return const [];
+  }
+
+  String _uid(dynamic v) {
+    if (v == null) return '';
+    if (v is String) return v;
+    if (v is Map) return (v['user_id'] ?? v['uid'] ?? v['username'] ?? '').toString();
+    return '';
+  }
+
+  try {
+    final rawMembers = await _fetchMembersDetail(); // リスト（String または Map 混在可）
+    if (rawMembers.isEmpty) {
+      // debugPrint('[Chat] members empty -> cannot resolve owner/partners');
+      setState(() {
+        _selfIsOwner = true;
+        _selfOwnerUser = MatchUser(userId: widget.currentUserId, avatarUrl: _avatarCache[widget.currentUserId]);
+        _myInviteeUser = null;
+        _partnerInviteeUser = null;
+      });
+      return;
+    }
+
+    // 正規化
+    final members = <Map<String, dynamic>>[];
+    for (final e in rawMembers) {
+      if (e is String) {
+        members.add({'user_id': e, 'role': 'member', 'invited_by': null});
+      } else if (e is Map) {
+        final uid = _uid(e['user'] ?? e['user_id']);
+        if (uid.isEmpty) continue;
+        members.add({
+          'user_id': uid,
+          'role': (e['role'] ?? 'member').toString(),
+          'invited_by': e['invited_by'],
+        });
+      }
+    }
+
+    final me = widget.currentUserId;
+
+    // オーナー2名（なければ matched_pair を後で使う…が、一覧には role がだいたい入ってくる想定）
+    var ownerIds = <String>[
+      for (final m in members) if (m['role'] == 'owner') _uid(m['user_id'])
+    ].where((s) => s.isNotEmpty).toList();
+
+    // owners が欠けてたら matched_pair を使うフォールバック
+    if (ownerIds.length < 2) {
+      try {
+        final uri = Uri.parse('https://settee.jp/conversations/user/${widget.currentUserId}/');
+        final res = await http.get(uri).timeout(const Duration(seconds: 8));
+        if (res.statusCode == 200) {
+          final List list = jsonDecode(utf8.decode(res.bodyBytes));
+          for (final it in list) {
+            final id = (it['id'] is int) ? it['id'] : int.tryParse('${it['id']}');
+            if (id != widget.conversationId) continue;
+            final mp = it['matched_pair'];
+            final collect = <String>[];
+            if (mp is List) {
+              for (final a in mp) {
+                final s = _uid(a);
+                if (s.isNotEmpty) collect.add(s);
+              }
+            } else if (mp is Map) {
+              for (final k in ['a','b','first','second','matched_pair_a','matched_pair_b','user_a','user_b']) {
+                final s = _uid(mp[k]);
+                if (s.isNotEmpty) collect.add(s);
+              }
+            }
+            if (collect.isNotEmpty) ownerIds = collect.take(2).toList();
+            break;
+          }
+        }
+      } catch (_) {}
+    }
+
+    final iAmOwner = ownerIds.contains(me);
+    String? inviterOfMe;
+    if (!iAmOwner) {
+      final meRow = members.firstWhere(
+        (m) => _uid(m['user_id']) == me,
+        orElse: () => {},
+      );
+      inviterOfMe = _uid(meRow['invited_by']);
+    }
+
+    final selfOwnerId = iAmOwner ? me : inviterOfMe;           // 左下に来るべき
+    final partnerOwnerId = ownerIds.firstWhere(
+      (id) => id != (selfOwnerId ?? me),
+      orElse: () => (ownerIds.isNotEmpty ? ownerIds.first : widget.matchedUserId),
+    );                                                         // 左上に来るべき（= partner）
+
+    // 右上：partnerOwnerId が招待した人
+    String? partnerInviteeId;
+    for (final m in members) {
+      if (m['role'] == 'owner') continue;
+      final uid = _uid(m['user_id']);
+      final inv = _uid(m['invited_by']);
+      if (uid.isNotEmpty && inv == partnerOwnerId) {
+        partnerInviteeId = uid;
+        break;
+      }
+    }
+
+    // 右下：自分がオーナーなら自分が招待した人、非オーナーなら「自分」
+    String? myInviteeId;
+    if (iAmOwner) {
+      for (final m in members) {
+        if (m['role'] == 'owner') continue;
+        final uid = _uid(m['user_id']);
+        final inv = _uid(m['invited_by']);
+        if (uid.isNotEmpty && inv == me) {
+          myInviteeId = uid;
+          break;
+        }
+      }
+    } else {
+      myInviteeId = me;
+    }
+
+    // debugPrint('[Chat] resolve: owners=$ownerIds iAmOwner=$iAmOwner selfOwner=$selfOwnerId partnerOwner=$partnerOwnerId partnerInvitee=$partnerInviteeId myInvitee=$myInviteeId');
+
+    // アバターを準備
+    await Future.wait([
+      if (selfOwnerId != null) _ensureAvatarLoaded(selfOwnerId),
+      if (partnerOwnerId.isNotEmpty) _ensureAvatarLoaded(partnerOwnerId),
+      if (partnerInviteeId != null) _ensureAvatarLoaded(partnerInviteeId),
+      if (myInviteeId != null) _ensureAvatarLoaded(myInviteeId),
+    ]);
+
+    if (!mounted) return;
+    setState(() {
+      _selfIsOwner = iAmOwner;
+      _selfOwnerUser = (selfOwnerId != null)
+          ? MatchUser(userId: selfOwnerId, avatarUrl: _avatarCache[selfOwnerId])
+          : MatchUser(userId: me, avatarUrl: _avatarCache[me]); // 最低限
+      _partnerInviteeUser = (partnerInviteeId != null)
+          ? MatchUser(userId: partnerInviteeId, avatarUrl: _avatarCache[partnerInviteeId])
+          : null;
+      _myInviteeUser = (myInviteeId != null)
+          ? MatchUser(userId: myInviteeId, avatarUrl: _avatarCache[myInviteeId])
+          : null;
+
+      // partner（左上に出す）は「自分を招待していない方のオーナー」で固定したい場合、
+      // matchedUserId ではなく partnerOwnerId を優先してキャッシュしておく（任意）
+      _avatarCache[widget.matchedUserId] ??= _avatarCache[partnerOwnerId];
+    });
+  } catch (e) {
+    // debugPrint('[Chat] _loadDoubleContext error: $e');
+  }
+}
+
+
+  String get _bannerPartnerName {
+    final s = (widget.partnerSoloName ?? '').trim();
+    if (s.isNotEmpty) return s;
+
+    final t = widget.matchedUserNickname.trim();
+    final i = t.indexOf(' と ');
+    return (i > 0) ? t.substring(0, i) : t; // 例: "あみ と ゆき" → "あみ"
+  }
+
+  // ---- 1枚目アバターURLを“できるだけ確実に”返す（HEAD → GET Range → GET）
   Future<String?> _resolveFirstAvatarUrl(String userId) async {
+    _logAva('resolve start uid=$userId');
     final preferred = ['jpg','jpeg','png','JPG','JPEG','PNG'];
     final others    = ['heic','heif','HEIC','HEIF'];
 
@@ -472,22 +756,33 @@ class _ChatScreenState extends State<ChatScreen> {
         final uri = Uri.parse('https://settee.jp/images/$userId/${userId}_$i.$ext');
         try {
           final head = await http.head(uri).timeout(const Duration(seconds: 4));
+          _logAva('HEAD $uri -> ${head.statusCode}');
           if (head.statusCode == 200) return uri.toString();
           if (head.statusCode == 405 || head.statusCode == 403) {
             final get = await http.get(uri, headers: {'Range': 'bytes=0-0'}).timeout(const Duration(seconds: 6));
+            _logAva('RANGE $uri -> ${get.statusCode}');
             if (get.statusCode == 200 || get.statusCode == 206) return uri.toString();
           }
-        } catch (_) {/* 次の候補へ */}
+        } catch (e) {
+          _logAva('try $uri error=$e');
+        }
       }
     }
+    _logAva('resolve fail uid=$userId');
     return null;
   }
 
-
-  // キャッシュに無ければ読み込む
   Future<void> _ensureAvatarLoaded(String userId) async {
-    if (_avatarCache.containsKey(userId)) return;
+    if (userId.contains('{') || userId.contains(' ')) {
+      _logAva('skip invalid uid=$userId'); // ← 追加ログ
+      return;
+    }
+    if (_avatarCache.containsKey(userId)) {
+      _logAva('cache HIT $userId -> ${_avatarCache[userId]}');
+      return;
+    }
     final url = await _resolveFirstAvatarUrl(userId);
+    _logAva('cache SET  $userId -> $url');
     if (!mounted) return;
     setState(() => _avatarCache[userId] = url);
   }
@@ -511,9 +806,28 @@ class _ChatScreenState extends State<ChatScreen> {
           final cid = widget.conversationId.toString();
           for (final it in items) {
             if ('${it['id']}' != cid) continue;
-            final members = (it['members'] as List?)?.map((e) => e.toString()).toList() ?? const [];
-            for (final uid in members) {
-              // 自分含む全員をキャッシュ
+            final rawMembers = (it['members'] as List?) ?? const [];
+            final memberIds = <String>{};
+
+            String _uidFrom(dynamic v) {
+              if (v == null) return '';
+              if (v is String) return v;
+              if (v is Map) {
+                final u = v['user_id'] ?? v['uid'] ?? v['username'] ?? v['user'];
+                if (u is String) return u;
+                if (u is Map) {
+                  final s = (u['user_id'] ?? u['uid'] ?? u['username'] ?? '').toString();
+                  return s;
+                }
+              }
+              return '';
+            }
+
+            for (final m in rawMembers) {
+              final uid = _uidFrom(m);
+              if (uid.isNotEmpty) memberIds.add(uid);
+            }
+            for (final uid in memberIds) {
               await _ensureAvatarLoaded(uid);
             }
             break;
@@ -533,30 +847,39 @@ class _ChatScreenState extends State<ChatScreen> {
     await Future.wait(ids.map(_ensureAvatarLoaded));
   }
 
-
-  Future<void> fetchMessages() async {
-    try {
-      if (widget.headerMode == MatchMode.double && widget.conversationId != null) {
-        final uri = Uri.parse('https://settee.jp/conversations/${widget.conversationId}/messages/');
-        final res = await http.get(uri);
-        if (res.statusCode == 200) {
-          final list = json.decode(utf8.decode(res.bodyBytes)) as List<dynamic>;
-          setState(() => messages = list);
-          _warmAvatarCacheFromMessages(list);
-        }
+Future<void> fetchMessages() async {
+  try {
+    if (widget.headerMode == MatchMode.double && widget.conversationId != null) {
+      final uri = Uri.parse('https://settee.jp/conversations/${widget.conversationId}/messages/');
+      _log('fetch(double) GET $uri');
+      final res = await http.get(uri);
+      _log('fetch(double) status=${res.statusCode}');
+      if (res.statusCode == 200) {
+        final list = json.decode(utf8.decode(res.bodyBytes)) as List<dynamic>;
+        _log('fetch(double) count=${list.length}');
+        setState(() => messages = list);
+        _warmAvatarCacheFromMessages(list);
       } else {
-        final uri = Uri.parse('https://settee.jp/messages/${widget.currentUserId}/${widget.matchedUserId}/');
-        final res = await http.get(uri);
-        if (res.statusCode == 200) {
-          final list = json.decode(utf8.decode(res.bodyBytes)) as List<dynamic>;
-          setState(() => messages = list);
-          _warmAvatarCacheFromMessages(list);
-        }
+        _log('fetch(double) body=${res.body}');
       }
-    } catch (e) {
-      debugPrint('メッセージ取得エラー: $e');
+    } else {
+      final uri = Uri.parse('https://settee.jp/messages/${widget.currentUserId}/${widget.matchedUserId}/');
+      _log('fetch(single) GET $uri');
+      final res = await http.get(uri);
+      _log('fetch(single) status=${res.statusCode}');
+      if (res.statusCode == 200) {
+        final list = json.decode(utf8.decode(res.bodyBytes)) as List<dynamic>;
+        _log('fetch(single) count=${list.length}');
+        setState(() => messages = list);
+        _warmAvatarCacheFromMessages(list);
+      } else {
+        _log('fetch(single) body=${res.body}');
+      }
     }
+  } catch (e) {
+    _log('メッセージ取得エラー: $e');
   }
+}
 
   Future<void> sendMessage(String text) async {
     try {
@@ -572,7 +895,7 @@ class _ChatScreenState extends State<ChatScreen> {
           _controller.clear();
           fetchMessages();
         } else {
-          debugPrint('送信失敗(double): ${res.statusCode} ${res.body}');
+          // debugPrint('送信失敗(double): ${res.statusCode} ${res.body}');
         }
       } else {
         // Single: /messages/send/
@@ -590,11 +913,11 @@ class _ChatScreenState extends State<ChatScreen> {
           _controller.clear();
           fetchMessages();
         } else {
-          debugPrint('送信失敗(single): ${res.statusCode} ${res.body}');
+          // debugPrint('送信失敗(single): ${res.statusCode} ${res.body}');
         }
       }
     } catch (e) {
-      debugPrint('送信エラー: $e');
+      // debugPrint('送信エラー: $e');
     }
   }
 
@@ -602,7 +925,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<bool> _inviteToConversation(String inviteeUserId) async {
     final cid = widget.conversationId;
     if (cid == null) {
-      debugPrint('[invite] no conversationId');
+      // debugPrint('[invite] no conversationId');
       return false;
     }
     final uri = Uri.parse('https://settee.jp/double-match/invite/');
@@ -613,11 +936,11 @@ class _ChatScreenState extends State<ChatScreen> {
     };
     try {
       final body = jsonEncode(bodyMap);
-      debugPrint('[invite] POST $uri body=$body');
+      // debugPrint('[invite] POST $uri body=$body');
       final res = await http
           .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
           .timeout(const Duration(seconds: 10));
-      debugPrint('[invite] status=${res.statusCode} body=${res.body}');
+      // debugPrint('[invite] status=${res.statusCode} body=${res.body}');
       if (res.statusCode == 200) return true;
 
       String msg = '招待に失敗しました (${res.statusCode})';
@@ -630,7 +953,7 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       return false;
     } catch (e) {
-      debugPrint('[invite] error=$e');
+      // debugPrint('[invite] error=$e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('ネットワークエラーで招待に失敗しました')),
@@ -650,7 +973,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final partner = MatchUser(
       userId: widget.matchedUserId,
       avatarUrl: _avatarCache[widget.matchedUserId],
-      displayName: widget.matchedUserNickname,
+      displayName: _bannerPartnerName,
     );
 
     // 本文はスクロール全体で管理（ヘッダー＋メッセージ一覧）。
@@ -671,11 +994,23 @@ class _ChatScreenState extends State<ChatScreen> {
                 SliverToBoxAdapter(
                   child: MatchBanner(
                     mode: widget.headerMode,
-                    self: self,
-                    partner: partner,
-                    myInvitee: null,            // 必要ならサーバから取得
-                    partnerInvitee: null,       // 必要ならサーバから取得
-                    onInvite: (widget.headerMode == MatchMode.double && widget.conversationId != null)
+                    self: MatchUser(
+                      userId: widget.currentUserId,
+                      avatarUrl: _avatarCache[widget.currentUserId],
+                      displayName: 'あなた',
+                    ),
+                    partner: MatchUser( // 左上
+                      userId: widget.matchedUserId,
+                      avatarUrl: _avatarCache[widget.matchedUserId],
+                      displayName: _bannerPartnerName,
+                    ),
+                    myInvitee: _myInviteeUser,               // 右下 (owner時) or 自分 (非owner時)
+                    partnerInvitee: _partnerInviteeUser,     // 右上
+                    selfIsOwner: _selfIsOwner,
+                    selfOwner: _selfOwnerUser,               // 左下
+                    onInvite: (_selfIsOwner &&
+                              widget.headerMode == MatchMode.double &&
+                              widget.conversationId != null)
                         ? _inviteToConversation
                         : null,
                   ),
@@ -782,6 +1117,15 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Route<T> _noAnimRoute<T>(Widget page) => PageRouteBuilder<T>(
+    pageBuilder: (_, __, ___) => page,
+    transitionDuration: Duration.zero,
+    reverseTransitionDuration: Duration.zero,
+    transitionsBuilder: (_, __, ___, child) => child,
+    maintainState: false, // 前画面を保持しない（→ タイマー等は dispose される）
+    opaque: true,
+  );
+
   Widget _buildBottomNavigationBar(BuildContext context, String userId) {
     return Container(
       height: 70,
@@ -794,7 +1138,10 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           GestureDetector(
             onTap: () {
-              Navigator.push(context, MaterialPageRoute(builder: (_) => ProfileBrowseScreen(currentUserId: userId)));
+              Navigator.of(context).pushAndRemoveUntil(
+                 _noAnimRoute(ProfileBrowseScreen(currentUserId: userId)),
+                (route) => false
+              );
             },
             child: const Padding(
               padding: EdgeInsets.only(bottom: 10.0),
@@ -803,7 +1150,10 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           GestureDetector(
             onTap: () {
-              Navigator.push(context, MaterialPageRoute(builder: (_) => DiscoveryScreen(userId: userId)));
+              Navigator.of(context).pushAndRemoveUntil(
+                 _noAnimRoute(DiscoveryScreen(userId: userId)),
+                (route) => false
+              );
             },
             child: const Padding(
               padding: EdgeInsets.only(bottom: 10.0),
@@ -820,7 +1170,10 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           GestureDetector(
             onTap: () {
-              Navigator.push(context, MaterialPageRoute(builder: (_) => UserProfileScreen(userId: userId)));
+              Navigator.of(context).pushAndRemoveUntil(
+                 _noAnimRoute(UserProfileScreen(userId: userId)),
+                (route) => false
+              );
             },
             child: const Padding(
               padding: EdgeInsets.only(bottom: 10.0),

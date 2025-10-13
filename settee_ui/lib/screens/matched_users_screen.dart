@@ -15,11 +15,22 @@ class _ChatListItem {
   final String? partnerUserId;
   final String title;
   final List<String> avatarUserIds;
-  _ChatListItem.dm({required this.partnerUserId, required this.title, required this.avatarUserIds})
-      : kind = _ItemKind.dm, conversationId = null;
-  _ChatListItem.group({required this.conversationId, required this.title, required this.avatarUserIds})
-      : kind = _ItemKind.group, partnerUserId = null;
+
+  _ChatListItem.dm({
+    required this.partnerUserId,
+    required this.title,
+    required this.avatarUserIds,
+  })  : kind = _ItemKind.dm,
+        conversationId = null;
+
+  _ChatListItem.group({
+    required this.conversationId,
+    required this.partnerUserId,
+    required this.title,
+    required this.avatarUserIds,
+  })  : kind = _ItemKind.group;
 }
+
 // 画面クラスの先頭付近に追加
 enum _ConvMode { single, double }
 
@@ -27,6 +38,14 @@ class _ConvInfo {
   final _ConvMode mode;
   final int? conversationId;
   const _ConvInfo(this.mode, this.conversationId);
+}
+
+class _Member {
+  final String userId;
+  final String? nickname;   // APIにあれば拾う
+  final String role;        // 'owner' or 'member'
+  final String? invitedBy;  // user_id（なければnull）
+  _Member({required this.userId, this.nickname, required this.role, this.invitedBy});
 }
 
 class MatchedUsersScreen extends StatefulWidget {
@@ -86,6 +105,103 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
     } catch (_) {}
   }
 
+  // null/非Map/非文字列も安全に文字へ
+  String _asString(dynamic v) => (v == null) ? '' : v.toString();
+
+  String? _extractUserId(dynamic u) {
+    if (u == null) return null;
+    if (u is String && u.isNotEmpty) return u;
+    if (u is Map) {
+      final a = _asString(u['user_id']);
+      if (a.isNotEmpty) return a;
+      final b = _asString(u['uid']);
+      if (b.isNotEmpty) return b;
+      final c = _asString(u['username']);
+      if (c.isNotEmpty) return c;
+    }
+    return null;
+  }
+
+  String _displayNameFor(String uid, Map<String,String> nameById) {
+    return nameById[uid] ?? uid;
+  }
+
+  List<_Member> _parseMembersRich(dynamic raw) {
+    final out = <_Member>[];
+    if (raw is! List) return out;
+    for (final e in raw) {
+      if (e is Map) {
+        final uid = _extractUserId(e['user']) ?? _asString(e['user_id']);
+        if (uid.isEmpty) continue;
+        final nick = _asString(e['nickname']).isNotEmpty ? _asString(e['nickname']) : null;
+        final role = (_asString(e['role']).isNotEmpty) ? _asString(e['role']) : 'member';
+
+        // invited_by は user_id か userオブジェクト想定の両対応
+        String? invitedBy;
+        final rawInv = e['invited_by'];
+        if (rawInv != null) {
+          invitedBy = _extractUserId(rawInv) ?? _asString(rawInv);
+          if (invitedBy!.isEmpty) invitedBy = null;
+        }
+
+        out.add(_Member(userId: uid, nickname: nick, role: role, invitedBy: invitedBy));
+      } else if (e is String && e.isNotEmpty) {
+        out.add(_Member(userId: e, nickname: null, role: 'member', invitedBy: null));
+      }
+    }
+    return out;
+  }
+
+  List<String> _extractMatchedPairUserIds(dynamic raw) {
+    final ids = <String>[];
+    if (raw == null) return ids;
+
+    String? _take(dynamic v) {
+      // user_id らしきものを吸い上げ
+      if (v == null) return null;
+      if (v is String && v.isNotEmpty) return v;
+      if (v is Map) {
+        final a = _asString(v['user_id']);
+        if (a.isNotEmpty) return a;
+        final b = _asString(v['uid']);
+        if (b.isNotEmpty) return b;
+        final c = _asString(v['username']);
+        if (c.isNotEmpty) return c;
+      }
+      final s = _asString(v);
+      return s.isNotEmpty ? s : null;
+    }
+
+    if (raw is List) {
+      for (final e in raw) {
+        final t = _take(e);
+        if (t != null && t.isNotEmpty) ids.add(t);
+      }
+    } else if (raw is Map) {
+      // 想定されるキーを総当たり
+      for (final k in ['a','b','first','second','matched_pair_a','matched_pair_b','user_a','user_b']) {
+        if (raw.containsKey(k)) {
+          final t = _take(raw[k]);
+          if (t != null && t.isNotEmpty) ids.add(t);
+        }
+      }
+    } else {
+      // "u1,u2" のような文字列も一応対応
+      final s = _asString(raw);
+      if (s.contains(',')) {
+        ids.addAll(s.split(',').map((x) => x.trim()).where((x) => x.isNotEmpty));
+      }
+    }
+    return ids.toSet().take(2).toList(); // 重複排除して2件まで
+  }
+
+  T? _firstWhereOrNull<T>(Iterable<T> it, bool Function(T) test) {
+    for (final x in it) {
+      if (test(x)) return x;
+    }
+    return null;
+  }
+
   // 一覧の本体: /conversations/user/<me>/ の結果から DM/グループを構築
   Future<void> _buildItemsFromConversations() async {
     final items = <_ChatListItem>[];
@@ -97,14 +213,24 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
         return;
       }
       final List<dynamic> raw = jsonDecode(utf8.decode(res.bodyBytes));
+
       for (final it in raw) {
         final kind = (it['kind'] ?? '').toString().toLowerCase();
-        final members = _extractMemberUserIds(it['members']);
-        if (!members.contains(widget.userId)) continue; // 念のため
 
         if (kind == 'dm') {
-          final other = members.firstWhere((m) => m != widget.userId, orElse: () => '');
+          // ---- DM
+          final membersRich = _parseMembersRich(it['members']);
+          final me = widget.userId;
+          String other = membersRich
+              .map((m) => m.userId)
+              .firstWhere((id) => id.isNotEmpty && id != me, orElse: () => '');
+
+          if (other.isEmpty) {
+            final pair = _extractMatchedPairUserIds(it['matched_pair']);
+            other = pair.firstWhere((id) => id != me, orElse: () => '');
+          }
           if (other.isEmpty) continue;
+
           final title = _nameById[other] ?? other;
           items.add(_ChatListItem.dm(
             partnerUserId: other,
@@ -114,12 +240,97 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
         } else if (kind == 'double') {
           final cid = (it['id'] is int) ? it['id'] as int : int.tryParse('${it['id']}');
           if (cid == null) continue;
-          final preview = members.where((m) => m != widget.userId).take(3).toList();
-          final title = 'グループ (${members.length})';
+
+          final membersRich = _parseMembersRich(it['members']);
+
+          // ニックネーム辞書補完
+          for (final m in membersRich) {
+            if (m.nickname != null && m.nickname!.isNotEmpty) {
+              _nameById.putIfAbsent(m.userId, () => m.nickname!);
+            }
+          }
+
+          final me = widget.userId;
+
+          // ① オーナー2名（matched_pair優先、なければrole=owner）
+          List<String> owners = _extractMatchedPairUserIds(it['matched_pair']);
+          if (owners.length < 2) {
+            owners = membersRich.where((m) => m.role == 'owner').map((m) => m.userId).toList();
+          }
+          if (owners.length < 2) {
+            // debugPrint('[List] double cid=$cid owners不足: $owners');
+            continue;
+          }
+          final ownerA = owners[0];
+          final ownerB = owners[1];
+
+          final ownerAName = _displayNameFor(ownerA, _nameById);
+          final ownerBName = _displayNameFor(ownerB, _nameById);
+
+          // ② 自分の参加情報（自分がmemberならinvited_byに招待者）
+          final meEntry = _firstWhereOrNull<_Member>(membersRich, (m) => m.userId == me)
+              ?? _Member(userId: me, role: 'member', invitedBy: null);
+          final inviterId = meEntry.invitedBy; // null -> 自分はオーナー
+          final isOwner   = owners.contains(me);
+
+          // ③ 相方オーナー（リーディング画像＆タイトルの“左の人”）
+          String partnerOwnerId;
+          if (isOwner) {
+            // オーナー：もう一方のオーナー
+            partnerOwnerId = (ownerA == me) ? ownerB : ownerA;
+          } else {
+            // 非オーナー：自分を招待したオーナーではない方
+            final inv = inviterId ?? ownerA; // safety
+            partnerOwnerId = (ownerA == inv) ? ownerB : ownerA;
+          }
+          final partnerOwnerName = _displayNameFor(partnerOwnerId, _nameById);
+
+          // ④ その相方オーナーが招待した人
+          final partnerSideFriend = _firstWhereOrNull<_Member>(
+            membersRich,
+            (m) => m.role != 'owner' && m.invitedBy == partnerOwnerId,
+          );
+          final partnerSideFriendName = (partnerSideFriend != null)
+              ? _displayNameFor(partnerSideFriend.userId, _nameById)
+              : '未招待の友だち';
+
+          // ⑤ 自分が招待した人（オーナー時にサブタイトルで使う）
+          final myInvitedFriend = _firstWhereOrNull<_Member>(
+            membersRich,
+            (m) => m.role != 'owner' && m.invitedBy == me,
+          );
+          final myInvitedFriendName = (myInvitedFriend != null)
+              ? _displayNameFor(myInvitedFriend.userId, _nameById)
+              : '未招待の友だち';
+
+          // ⑥ サブタイトル右側の相手
+          //    - オーナー: 自分が招待した人
+          //    - 非オーナー: 自分を招待した人
+          final subtitleRightName = isOwner
+              ? myInvitedFriendName
+              : _displayNameFor(inviterId ?? '', _nameById);
+
+          // ⑦ タイトル/サブタイトル（“と”で連結）
+          //    オーナー：     タイトル= マッチ相手(相方オーナー) と その人が招待した人
+          //                   サブ      = あなた と 自分が招待した人
+          //    非オーナー：   タイトル= 招待者ではない方のオーナー と その人が招待した人
+          //                   サブ      = あなた と 自分を招待した人
+          final titleLine1 = '$partnerOwnerName と $partnerSideFriendName';
+          final titleLine2 = 'あなたと $subtitleRightName';
+
+          // ⑧ リーディング画像は常に “相方オーナー” のみ
+          final leadingIds = <String>[partnerOwnerId];
+
+          // デバッグ
+          // debugPrint('[List] double cid=$cid me=$me isOwner=$isOwner inviter=$inviterId '
+          //     'owners=$owners partnerOwner=$partnerOwnerId partnerFriend=${partnerSideFriend?.userId ?? "-"} '
+          //     'myFriend=${myInvitedFriend?.userId ?? "-"} title1="$titleLine1" title2="$titleLine2"');
+
           items.add(_ChatListItem.group(
             conversationId: cid,
-            title: title,
-            avatarUserIds: preview,
+            partnerUserId: partnerOwnerId,  // ← チャットに渡す“相方オーナー”
+            title: '$titleLine1\n$titleLine2',
+            avatarUserIds: leadingIds,      // ← 画像は相方オーナーのみ
           ));
         }
       }
@@ -270,31 +481,6 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
     } catch (e) {
       return '通信エラー: $e';
     }
-  }
-
-  Future<void> _prefetchConversationsForMe() async {
-    final uri = Uri.parse('https://settee.jp/conversations/user/${widget.userId}/');
-    try {
-      final res = await http.get(uri).timeout(const Duration(seconds: 10));
-      if (res.statusCode != 200) return;
-
-      final List<dynamic> items = jsonDecode(utf8.decode(res.bodyBytes));
-      for (final it in items) {
-        final kind = (it['kind'] ?? '').toString().toLowerCase();
-        if (kind != 'double') continue;
-
-        final int? cid = (it['id'] is int) ? it['id'] as int : int.tryParse('${it['id']}');
-        if (cid == null) continue;
-
-        // ← ここだけ置き換え
-        final memberIds = _extractMemberUserIds(it['members']);
-        if (!memberIds.contains(widget.userId)) continue;
-        for (final m in memberIds) {
-          if (m == widget.userId) continue;
-          _convCache[m] = _ConvInfo(_ConvMode.double, cid);
-        }
-      }
-    } catch (_) {/* ignore */}
   }
 
   Future<String?> _reportUser({
@@ -584,10 +770,19 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
                     itemBuilder: (context, index) {
                       final it = _items[index];
                       final isGroup = it.kind == _ItemKind.group;
-                      final title = it.title;
+                      final lines   = it.title.split('\n');
+                      final title1  = lines.first;
+                      final title2  = (lines.length > 1) ? lines.sublist(1).join('\n') : null;
                       return ListTile(
-                        leading: _buildLeadingAvatars(it),
-                        title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      leading: _buildLeadingAvatars(it),
+                      title: Text(
+                        title1,
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                      ),
+                      // ★ グループのみ2行目を出す（DMは1行のままでもOK）
+                      subtitle: isGroup && title2 != null
+                          ? Text(title2, style: const TextStyle(color: Colors.white70))
+                          : null,
                         trailing: isGroup
                             ? null
                             : PopupMenuButton<String>(
@@ -595,7 +790,7 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
                                 color: const Color(0xFF121212),
                                 onSelected: (value) async {
                                   if (value == 'block') {
-                                    final nick = title;
+                                    final nick = title1;
                                     final ok = await _confirmBlock(context, nick);
                                     if (ok == true) {
                                       final err = await _blockUser(widget.userId, it.partnerUserId!);
@@ -607,7 +802,7 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
                                       }
                                     }
                                   } else if (value == 'report') {
-                                    final ok = await _confirmReport(context, title);
+                                    final ok = await _confirmReport(context, title1);
                                     if (ok == true) {
                                       final err = await _reportUser(targetId: it.partnerUserId!);
                                       if (context.mounted) {
@@ -631,13 +826,19 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
                               ),
                         onTap: () {
                           if (isGroup) {
+                            final partnerId   = it.partnerUserId!;                 // 相手 userId
+                            final partnerName = _nameById[partnerId] ?? partnerId; // 相手の単独名
+                            final lines  = it.title.split('\n');
+                            final title1 = lines.first; // "あみ と ゆき" のようなナビ用の見出し
+
                             Navigator.push(context, MaterialPageRoute(
                               builder: (_) => ChatScreen(
                                 currentUserId: widget.userId,
-                                matchedUserId: '__group__',
-                                matchedUserNickname: title,
+                                matchedUserId: partnerId,
+                                matchedUserNickname: title1,   // ← AppBar 用（"あみ と ゆき"）
+                                partnerSoloName: partnerName,  // ← バナー文言用（"あみ"）
                                 headerMode: MatchMode.double,
-                                conversationId: it.conversationId, // ★グループは会話IDで開く
+                                conversationId: it.conversationId,
                               ),
                             ));
                           } else {
@@ -645,7 +846,7 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
                               builder: (_) => ChatScreen(
                                 currentUserId: widget.userId,
                                 matchedUserId: it.partnerUserId!,
-                                matchedUserNickname: title,
+                                matchedUserNickname: title1,
                                 headerMode: MatchMode.single,
                               ),
                             ));
@@ -660,6 +861,15 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
     );
   }
 
+  Route<T> _noAnimRoute<T>(Widget page) => PageRouteBuilder<T>(
+    pageBuilder: (_, __, ___) => page,
+    transitionDuration: Duration.zero,
+    reverseTransitionDuration: Duration.zero,
+    transitionsBuilder: (_, __, ___, child) => child,
+    maintainState: false, // 前画面を保持しない（→ タイマー等は dispose される）
+    opaque: true,
+  );
+
   Widget _buildBottomNavigationBar(BuildContext context, String userId) {
     return Container(
       height: 70,
@@ -672,9 +882,9 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
         children: [
           GestureDetector(
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => ProfileBrowseScreen(currentUserId: userId)),
+              Navigator.of(context).pushAndRemoveUntil(
+                _noAnimRoute(ProfileBrowseScreen(currentUserId: userId)),
+                (route) => false,
               );
             },
             child: Padding(
@@ -684,11 +894,9 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
           ),
           GestureDetector(
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => DiscoveryScreen(userId: userId),
-                ),
+              Navigator.of(context).pushAndRemoveUntil(
+                _noAnimRoute(DiscoveryScreen(userId: userId)),
+                (route) => false,
               );
             },
             child: Padding(
@@ -712,11 +920,9 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
           ),
           GestureDetector(
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => UserProfileScreen(userId: userId),
-                ),
+              Navigator.of(context).pushAndRemoveUntil(
+                _noAnimRoute(UserProfileScreen(userId: userId)),
+                (route) => false,
               );
             },
             child: Padding(

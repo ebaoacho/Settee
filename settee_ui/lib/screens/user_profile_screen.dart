@@ -133,8 +133,8 @@ class UserProfileScreenState extends State<UserProfileScreen> {
       final streamRes = await req.send();
       final res = await http.Response.fromStream(streamRes);
 
-      debugPrint('UPLOAD status: ${res.statusCode}');
-      debugPrint('UPLOAD body: ${res.body}');
+      // debugPrint('UPLOAD status: ${res.statusCode}');
+      // debugPrint('UPLOAD body: ${res.body}');
 
       if (res.statusCode == 200 || res.statusCode == 201) {
         setState(() { _cacheBuster[index] = DateTime.now().millisecondsSinceEpoch; });
@@ -469,6 +469,15 @@ class UserProfileScreenState extends State<UserProfileScreen> {
     return null;
   }
 
+  Route<T> _noAnimRoute<T>(Widget page) => PageRouteBuilder<T>(
+    pageBuilder: (_, __, ___) => page,
+    transitionDuration: Duration.zero,
+    reverseTransitionDuration: Duration.zero,
+    transitionsBuilder: (_, __, ___, child) => child,
+    maintainState: false, // 前画面を保持しない（→ タイマー等は dispose される）
+    opaque: true,
+  );
+
   Widget _buildBottomNavigationBar(BuildContext context, String userId) {
     return Container(
       height: 70,
@@ -481,9 +490,9 @@ class UserProfileScreenState extends State<UserProfileScreen> {
         children: [
           GestureDetector(
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => ProfileBrowseScreen(currentUserId: userId)),
+              Navigator.of(context).pushAndRemoveUntil(
+                _noAnimRoute(ProfileBrowseScreen(currentUserId: userId)),
+                (route) => false,
               );
             },
             child: Padding(
@@ -493,11 +502,9 @@ class UserProfileScreenState extends State<UserProfileScreen> {
           ),
           GestureDetector(
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => DiscoveryScreen(userId: userId),
-                ),
+              Navigator.of(context).pushAndRemoveUntil(
+                _noAnimRoute(DiscoveryScreen(userId: userId),),
+                (route) => false,
               );
             },
             child: Padding(
@@ -514,11 +521,9 @@ class UserProfileScreenState extends State<UserProfileScreen> {
           ),
           GestureDetector(
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => MatchedUsersScreen(userId: userId),
-                ),
+              Navigator.of(context).pushAndRemoveUntil(
+                _noAnimRoute(MatchedUsersScreen(userId: userId),),
+                (route) => false,
               );
             },
             child: Padding(

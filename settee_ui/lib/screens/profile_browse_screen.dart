@@ -74,6 +74,19 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
   bool _privateActive = false;
   bool _kycOpening = false;
   bool _kycSubmitted = false;
+
+  int? _normalLikesLeft;
+  DateTime? _normalLikeResetAt;
+  bool _likeUnlimited = false; // Plus/VIP の場合に true
+  // 残数を使い切っているか？（null=未取得 は “使い切りではない” と扱う）
+  bool get _isOutOfNormalLikes =>
+      !_likeUnlimited && _normalLikesLeft != null && _normalLikesLeft! <= 0;
+  // 通常Likeが可能か？（無制限 or 未取得(null) or 残数>0）
+  bool get _canNormalLike =>
+      _likeUnlimited || _normalLikesLeft == null || _normalLikesLeft! > 0;
+  int _entitlementsSeq = 0;
+
+
   bool get _isPagingLocked => _isLikeEffectActive;
 
   int _treatLikeCredits = 0;
@@ -118,7 +131,7 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
         await fut;
       }
     } catch (e) {
-      debugPrint('[bootstrap:$tag] $e'); // 失敗はログだけ
+      // debugPrint('[bootstrap:$tag] $e'); // 失敗はログだけ
     }
   }
 
@@ -175,7 +188,7 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
         }
       }
     } catch (e) {
-      debugPrint('未読マッチチェックエラー: $e');
+      // debugPrint('未読マッチチェックエラー: $e');
     }
   }
 
@@ -329,7 +342,7 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
       // TODO: N+1問題解消
       for (final partnerId in partnerIds) {
         final url = 'https://settee.jp/match/${widget.currentUserId}/$partnerId/read/';
-        debugPrint('既読更新URL: $url');
+        // debugPrint('既読更新URL: $url');
         
         final updateResponse = await http.patch(
           Uri.parse(url),
@@ -337,10 +350,10 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
         );
 
         if (updateResponse.statusCode == 200) {
-          debugPrint('既読にしました');
+          // debugPrint('既読にしました');
         } else {
-          debugPrint('既読更新失敗: ${updateResponse.statusCode}');
-          debugPrint('レスポンスボディ: ${updateResponse.body}');
+          // debugPrint('既読更新失敗: ${updateResponse.statusCode}');
+          // debugPrint('レスポンスボディ: ${updateResponse.body}');
         }
       }
 
@@ -357,7 +370,7 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
     for (final partnerId in partnerIds) {
       final url =
           'https://settee.jp/match/${widget.currentUserId}/$partnerId/read/';
-      debugPrint('既読更新URL: $url');
+      // debugPrint('既読更新URL: $url');
 
       final updateResponse = await http.patch(
         Uri.parse(url),
@@ -365,10 +378,10 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
       );
 
       if (updateResponse.statusCode == 200) {
-        debugPrint('既読にしました');
+        // debugPrint('既読にしました');
       } else {
-        debugPrint('既読更新失敗: ${updateResponse.statusCode}');
-        debugPrint('レスポンスボディ: ${updateResponse.body}');
+        // debugPrint('既読更新失敗: ${updateResponse.statusCode}');
+        // debugPrint('レスポンスボディ: ${updateResponse.body}');
       }
     }
     // result == false または null の場合は何もしない（ダイアログを閉じるだけ）
@@ -428,10 +441,10 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
           'other': other,
         }),
       );
-      debugPrint('matchResponse: ${matchResponse.body}');
+      // debugPrint('matchResponse: ${matchResponse.body}');
       
       if (matchResponse.statusCode == 201) {
-        debugPrint('マッチ作成成功');
+        // debugPrint('マッチ作成成功');
          
         // 2. 必要であれば既読にする
         final updateResponse = await http.patch(
@@ -442,20 +455,20 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
         );
         
         if (updateResponse.statusCode == 200) {
-          debugPrint('既読にしました');
+          // debugPrint('既読にしました');
         } else {
-          debugPrint('既読更新失敗: ${updateResponse.statusCode}');
+          // debugPrint('既読更新失敗: ${updateResponse.statusCode}');
         }
         
       } else if (matchResponse.statusCode == 400) {
         final error = jsonDecode(matchResponse.body);
-        debugPrint('マッチ作成失敗: ${error['error']}');
+        // debugPrint('マッチ作成失敗: ${error['error']}');
       } else {
-        debugPrint('マッチ作成失敗: ${matchResponse.statusCode}');
+        // debugPrint('マッチ作成失敗: ${matchResponse.statusCode}');
       }
       
     } catch (e) {
-      debugPrint('エラー: $e');
+      // debugPrint('エラー: $e');
     }
   }
 
@@ -470,10 +483,10 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
         {'user_id': userId, 'amount': amount}
       ));
     if (r.statusCode == 200) {
-      debugPrint('ポイントが作成されました');
+      // debugPrint('ポイントが作成されました');
     } else {
-      debugPrint('ポイント作成失敗: ${r.statusCode}');
-      debugPrint('レスポンスボディ: ${r.body}');
+      // debugPrint('ポイント作成失敗: ${r.statusCode}');
+      // debugPrint('レスポンスボディ: ${r.body}');
     }
   }
 
@@ -549,61 +562,108 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
         await _checkAndShowUnreadMatchesDialog();
       }
     } catch (e) {
-      debugPrint('match-check failed: $e');
+      // debugPrint('match-check failed: $e');
     }
   }
 
-// 画面重複表示を防ぐための小さなセット（Stateのフィールドとして宣言して下さい）
-Set<String>? _openedMatchFor;
-
+  // 画面重複表示を防ぐための小さなセット（Stateのフィールドとして宣言して下さい）
+  Set<String>? _openedMatchFor;
 
   Future<String> _fetchEntitlements(String userId) async {
     final uri = Uri.parse('https://settee.jp/users/$userId/entitlements/');
+    final mySeq = ++_entitlementsSeq; // 応答の新旧判定用
+
     try {
       final r = await http.get(uri).timeout(const Duration(seconds: 10));
+      // debugPrint('[ent][rawStatus] ${r.statusCode}');
+      // debugPrint('[ent][rawBody] ${utf8.decode(r.bodyBytes)}'); // 文字化け対策
+      if (r.statusCode != 200) return 'free';
+
+      if (!mounted || mySeq != _entitlementsSeq) return 'free'; // 遅れて来た古い応答は捨てる
       if (r.statusCode != 200) return 'free';
 
       final j = jsonDecode(r.body) as Map<String, dynamic>;
+      // debugPrint('[ent][keys] ${j.keys.toList()}');
       if (!mounted) return 'free';
 
       final now = DateTime.now();
 
-      // ---- VIPの有効判定（activeフラグ or untilでフォールバック）----
-      final sVip = j['settee_vip_until'] as String?;
-      final vipUntil = sVip == null ? null : DateTime.tryParse(sVip);
-      final vipActive = (j['settee_vip_active'] ?? false) as bool ||
-          (vipUntil != null && vipUntil.isAfter(now));
+      // 1) サーバの“真値”を優先
+      final tierRaw = (j['tier'] as String?)?.toUpperCase();
+      bool isVip  = tierRaw == 'VIP';
+      bool isPlus = tierRaw == 'PLUS';
+      final likeUnlimited = j['like_unlimited'] == true;
 
-      // ---- PLUSの有効判定（activeフラグ or untilでフォールバック）----
+      // 2) until は表示用のみ
+      final sVip  = j['settee_vip_until']  as String?;
       final sPlus = j['settee_plus_until'] as String?;
-      final plusUntil = sPlus == null ? null : DateTime.tryParse(sPlus);
-      final plusActive = (j['settee_plus_active'] ?? false) as bool ||
-          (plusUntil != null && plusUntil.isAfter(now));
+      final vipUntil  = (sVip?.isNotEmpty == true)  ? DateTime.tryParse(sVip!)  : null;
+      final plusUntil = (sPlus?.isNotEmpty == true) ? DateTime.tryParse(sPlus!) : null;
 
-      // ---- プラン文字列（vip優先）----
-      final plan = vipActive ? 'vip' : (plusActive ? 'plus' : 'free');
+      // 3) tier が無い古い環境のフォールバック（任意）
+      if (tierRaw == null || tierRaw.isEmpty) {
+        final vipActiveByFlag   = j['settee_vip_active']  == true;
+        final plusActiveByFlag  = j['settee_plus_active'] == true;
+        final vipActiveByUntil  = vipUntil  != null && vipUntil.isAfter(now);
+        final plusActiveByUntil = plusUntil != null && plusUntil.isAfter(now);
+        isVip  = vipActiveByFlag  || vipActiveByUntil;
+        isPlus = !isVip && (plusActiveByFlag || plusActiveByUntil);
+      }
+
+      final plan = isVip ? 'vip' : (isPlus ? 'plus' : 'free');
+
+      // 4) 通常Like残数（free時のみ値が入る）。⚠️ ここで 0 フォールバックしない
+      final remainRaw = j['normal_like_remaining'];                 // int or null
+      final parsedRemain = (remainRaw == null)
+          ? null
+          : int.tryParse(remainRaw.toString());                      // 型揺れ対策
+
+      final resetStr = j['normal_like_reset_at'] as String?;
+      final normalLikeResetAt = (resetStr?.isNotEmpty == true)
+          ? DateTime.tryParse(resetStr!)
+          : null;
+
+      // その他クレジット/フラグ
+      final msgCredits   = (j['message_like_credits'] ?? 0) as int;
+      final superCredits = (j['super_like_credits']  ?? 0) as int;
+      final treatCredits = (j['treat_like_credits']  ?? 0) as int;
+      final boostActive   = (j['boost_active']        ?? false) as bool;
+      final privateActive = (j['private_mode_active'] ?? false) as bool;
+      final backtrackEnabled = (plan == 'vip') || ((j['backtrack_enabled'] ?? false) as bool);
+      final refineUnlocked  = (j['refine_unlocked'] ?? j['can_refine'] ?? false) as bool;
 
       setState(() {
-        // 残数系
-        _msgLikeCredits   = (j['message_like_credits'] ?? 0) as int;
-        _superLikeCredits = (j['super_like_credits']  ?? 0) as int;
-        _treatLikeCredits = (j['treat_like_credits']  ?? 0) as int;
+        // 可否判定はサーバ真値に従う
+        _likeUnlimited = likeUnlimited;
 
-        // 期間/フラグ
-        _refineUnlocked   = (j['refine_unlocked'] ?? j['can_refine'] ?? false) as bool;
-        _setteePlusUntil  = plusUntil;
-        _setteeVipUntil   = vipUntil;
-        _setteePlusActive = plusActive;
-        _setteeVipActive  = vipActive;
-        _boostActive      = (j['boost_active']        ?? false) as bool;
-        _privateActive    = (j['private_mode_active'] ?? false) as bool;
+        // 無制限→残数UIを使わないので null、free→サーバ値そのまま
+        if (_likeUnlimited) {
+          _normalLikesLeft   = null;   // ★ ここを 0 にしない
+          _normalLikeResetAt = null;
+        } else {
+          _normalLikesLeft   = parsedRemain;      // ★ 欠落は null（未取得＝ロックしない）
+          _normalLikeResetAt = normalLikeResetAt; // UTCのまま保持でもOK（表示時に toLocal()）
+        }
 
-        // ✅ vipなら無条件でtrue（サーバがbacktrack_enabledを返してもvip優先）
-        _backtrackEnabled = vipActive || ((j['backtrack_enabled'] ?? false) as bool);
+        _setteeVipUntil   = vipUntil;   // 表示用
+        _setteePlusUntil  = plusUntil;  // 表示用
+
+        _msgLikeCredits   = msgCredits;
+        _superLikeCredits = superCredits;
+        _treatLikeCredits = treatCredits;
+
+        _boostActive      = boostActive;
+        _privateActive    = privateActive;
+        _backtrackEnabled = backtrackEnabled;
+        _refineUnlocked   = refineUnlocked;
+
+        _setteeVipActive  = (plan == 'vip');
+        _setteePlusActive = (plan == 'plus');
       });
-
-      return plan;
+_logEnt('after fetchEntitlements');
+      return plan; // 'vip' | 'plus' | 'free'
     } catch (_) {
+      // 失敗時は状態を変えない（＝_normalLikesLeft は null のまま→ロックしない）
       return 'free';
     }
   }
@@ -685,7 +745,7 @@ Set<String>? _openedMatchFor;
         isMatchMultiple = data['match_multiple'];
       });
     } else {
-      debugPrint("ユーザー情報取得失敗: ${response.body}");
+      // debugPrint("ユーザー情報取得失敗: ${response.body}");
     }
   }
 
@@ -1020,7 +1080,7 @@ Set<String>? _openedMatchFor;
         return;
       }
     } catch (e) {
-      debugPrint('fetch error: $e');
+      // debugPrint('fetch error: $e');
     } finally {
       // ★ 古い呼び出しが isFetching を false に戻さないように
       if (mounted && gen == _listGeneration) {
@@ -1160,6 +1220,15 @@ Set<String>? _openedMatchFor;
       if (r.statusCode >= 400) {
         final j = jsonDecode(utf8.decode(r.bodyBytes));
         final msg = j['error']?.toString() ?? '送信に失敗しました';
+        final code = j['code']?.toString();
+        if (code == 'NO_NORMAL_LIKE_REMAINING') {
+          setState(() {
+            _likeUnlimited = false;
+            _normalLikesLeft = 0;
+            final rs = j['reset_at'] as String?;
+            _normalLikeResetAt = (rs != null) ? DateTime.tryParse(rs) : null;
+          });
+        }
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
         }
@@ -1392,17 +1461,17 @@ Set<String>? _openedMatchFor;
       final res = await http.get(uri);
 
       // ★ デバッグ: ステータスと生ボディ
-      debugPrint('[recvLikes] status=${res.statusCode}');
+      // debugPrint('[recvLikes] status=${res.statusCode}');
       if (res.statusCode != 200) {
-        debugPrint('[recvLikes] body=${res.body}');
+        // debugPrint('[recvLikes] body=${res.body}');
         return;
       }
 
       final List data = jsonDecode(res.body) as List;
 
-      // ★ デバッグ: 受け取った件数と先頭3件
-      debugPrint('[recvLikes] count=${data.length}');
-      debugPrint('[recvLikes] head=${data.take(3).toList()}');
+      // デバッグ: 受け取った件数と先頭3件
+      // debugPrint('[recvLikes] count=${data.length}');
+      // debugPrint('[recvLikes] head=${data.take(3).toList()}');
 
       final tmp = <String, _ReceivedLike>{};
       for (final raw in data) {
@@ -1423,20 +1492,20 @@ Set<String>? _openedMatchFor;
           ..addAll(tmp);
       });
 
-      // ★ デバッグ: マップのキー一覧（=送ってきたユーザID）
-      debugPrint('[recvLikes] keys=${_receivedLikes.keys.toList()}');
+      // デバッグ: マップのキー一覧（=送ってきたユーザID）
+      // debugPrint('[recvLikes] keys=${_receivedLikes.keys.toList()}');
 
-      // ★ 初回レース対策: 現在表示中ユーザで再チェック
+      // 初回レース対策: 現在表示中ユーザで再チェック
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || profiles.isEmpty) return;
         final idx = (_pageController.hasClients ? _pageController.page?.round() : 0) ?? 0;
         final safe = idx.clamp(0, profiles.length - 1);
         final viewed = profiles[safe]['user_id'].toString().trim();
-        debugPrint('[recvLikes] recheck current view=$viewed');
+        // debugPrint('[recvLikes] recheck current view=$viewed');
         _checkIncomingPaidLikeFor(viewed);
       });
     } catch (e) {
-      debugPrint('[recvLikes] error=$e');
+      // debugPrint('[recvLikes] error=$e');
     } finally {
       _loadingReceivedLikes = false;
     }
@@ -1772,9 +1841,18 @@ Set<String>? _openedMatchFor;
       });
       await _fetchProfiles();
     } else {
-      debugPrint("更新失敗: ${response.body}");
+      // debugPrint("更新失敗: ${response.body}");
     }
   }
+
+  Route<T> _noAnimRoute<T>(Widget page) => PageRouteBuilder<T>(
+    pageBuilder: (_, __, ___) => page,
+    transitionDuration: Duration.zero,
+    reverseTransitionDuration: Duration.zero,
+    transitionsBuilder: (_, __, ___, child) => child,
+    maintainState: false, // 前画面を保持しない（→ タイマー等は dispose される）
+    opaque: true,
+  );
 
   Widget _buildBottomNavigationBar(BuildContext context, String userId) {
     return Container(
@@ -1795,11 +1873,9 @@ Set<String>? _openedMatchFor;
           ),
           GestureDetector(
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => DiscoveryScreen(userId: userId),
-                ),
+                Navigator.of(context).pushAndRemoveUntil(
+                  _noAnimRoute(DiscoveryScreen(userId: userId),),
+                (route) => false,
               );
             },
             child: Padding(
@@ -1816,11 +1892,9 @@ Set<String>? _openedMatchFor;
           ),
           GestureDetector(
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => MatchedUsersScreen(userId: userId),
-                ),
+                Navigator.of(context).pushAndRemoveUntil(
+                  _noAnimRoute(MatchedUsersScreen(userId: userId),),
+                (route) => false,
               );
             },
             child: Padding(
@@ -1830,11 +1904,9 @@ Set<String>? _openedMatchFor;
           ),
           GestureDetector(
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => UserProfileScreen(userId: userId),
-                ),
+                Navigator.of(context).pushAndRemoveUntil(
+                  _noAnimRoute(UserProfileScreen(userId: userId),),
+                (route) => false,
               );
             },
             child: Padding(
@@ -1920,18 +1992,39 @@ Set<String>? _openedMatchFor;
 
           // 通常Like：即次へ（押下中だけ赤）
           if (type == 0) {
+            // 無制限でない & 残数0 → Paywallへ
+            if (_isOutOfNormalLikes) {
+              goPaywall(context, userId: widget.currentUserId);
+              return;
+            }
+
             setInnerState(() => isPressed = true);
+
+            // null 安全な“楽観減算”のために 0 に寄せて保持
+            final before = _normalLikesLeft ?? 0;
+
             await _sendLike(receiverId, type);
 
             // 相互Like成立ならマッチ画面を表示
             await _checkAndShowMatch(receiverId);
 
-            // 次へ（※マッチ画面はフルスクリーンなので、出ていても裏で進むだけ）
-            if (_pageController.page != null && _pageController.page!.round() < profiles.length - 1) {
-              _pageController.nextPage(duration: const Duration(milliseconds: 500), curve: Curves.easeInOut);
+            // ページ送り（hasClients/境界チェックも堅めに）
+            final pg = _pageController.hasClients ? _pageController.page : null;
+            if (pg != null && pg.round() < profiles.length - 1) {
+              _pageController.nextPage(
+                duration: const Duration(milliseconds: 500),
+                curve: Curves.easeInOut,
+              );
+            }
+
+            // 楽観的に減算（無制限は減算しない）
+            if (!_likeUnlimited && before > 0) {
+              setState(() => _normalLikesLeft = before - 1);
             }
 
             setInnerState(() => isPressed = false);
+
+            // サーバの真値で再同期（上限エラー時の補正も吸収）
             await _fetchEntitlements(widget.currentUserId);
             onUsed?.call();
             return;
@@ -2109,7 +2202,12 @@ Set<String>? _openedMatchFor;
         Positioned(
           bottom: 140,
           right: 20,
-          child: _iconLikeButton(Icons.thumb_up, 0, userId, size: 75, enabled: true),
+          child: _iconLikeButton(
+            Icons.thumb_up, 0, userId,
+            size: 75,
+            enabled: _canNormalLike,
+            disabledReason: '通常Likeの残数がありません。', // 押下時はPaywall誘導でもOK
+          ),
         ),
       ],
     );
@@ -2792,6 +2890,36 @@ Set<String>? _openedMatchFor;
     );
   }
 
+  // ── デバッグスイッチ（本番では false に）
+  static const bool kDebugEntitlements = true;
+
+  // 連続ログのスパム抑制用（同じ内容を短時間に何度も出さない）
+  DateTime? _lastEntLogAt;
+  String?  _lastEntLogBody;
+
+  void _logEnt(String label) {
+    if (!kDebugEntitlements) return;
+
+    final resetLocal = _normalLikeResetAt?.toLocal();
+    final remainStr  = (_normalLikesLeft == null) ? 'null' : _normalLikesLeft.toString();
+    final body = 'plan(vip=${_setteeVipActive}, plus=${_setteePlusActive}) '
+                'unlimited=$_likeUnlimited remain=$remainStr '
+                'resetAt=${resetLocal?.toIso8601String() ?? "null"} '
+                'super=$_superLikeCredits treat=$_treatLikeCredits msg=$_msgLikeCredits';
+
+    // 直前と同じなら 1.5 秒間は抑止
+    final now = DateTime.now();
+    if (_lastEntLogBody == body && _lastEntLogAt != null &&
+        now.difference(_lastEntLogAt!) < const Duration(milliseconds: 1500)) {
+      return;
+    }
+    _lastEntLogBody = body;
+    _lastEntLogAt = now;
+
+    // debugPrint('[ent][$label] $body');
+  }
+
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -2841,16 +2969,31 @@ Set<String>? _openedMatchFor;
                             fit: StackFit.expand,
                             children: [
                               GestureDetector(
-                                onDoubleTap: () {
+                                onDoubleTap: () async {
                                   if (_isLikeEffectActive) return;
-                                  _sendLike(profile['user_id'], 0);
-                                  if (_pageController.page != null &&
-                                      _pageController.page!.round() < profiles.length - 1) {
+
+                                  // ★null安全なガード
+                                  if (_isOutOfNormalLikes) {
+                                    goPaywall(context, userId: widget.currentUserId);
+                                    return;
+                                  }
+
+                                  await _sendLike(profile['user_id'], 0);
+
+                                  // 楽観減算（無制限は減らさない）
+                                  if (!_likeUnlimited && (_normalLikesLeft ?? 0) > 0) {
+                                    setState(() => _normalLikesLeft = (_normalLikesLeft ?? 0) - 1);
+                                  }
+
+                                  final pg = _pageController.hasClients ? _pageController.page : null;
+                                  if (pg != null && pg.round() < profiles.length - 1) {
                                     _pageController.nextPage(
                                       duration: const Duration(milliseconds: 500),
                                       curve: Curves.easeInOut,
                                     );
                                   }
+
+                                  await _fetchEntitlements(widget.currentUserId);
                                 },
                                 child: _buildProfileImage(profile['user_id']),
                               ),
@@ -3873,7 +4016,7 @@ class _KycFlowScreenState extends State<KycFlowScreen> with WidgetsBindingObserv
       await ctrl.dispose();
     } catch (e) {
       // 権限なしや初期化失敗でも OK。目的は“登録”なので握りつぶす。
-      debugPrint('[preflight] initialize failed: $e');
+      // debugPrint('[preflight] initialize failed: $e');
     }
   }
 

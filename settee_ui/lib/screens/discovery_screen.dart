@@ -146,10 +146,10 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
           newUsers = json.decode(res2.body);
         });
       } else {
-        debugPrint('API取得に失敗しました');
+        // debugPrint('API取得に失敗しました');
       }
     } catch (e) {
-      debugPrint('通信エラー: $e');
+      // debugPrint('通信エラー: $e');
     }
   }
 
@@ -523,6 +523,15 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
     return null;
   }
 
+  Route<T> _noAnimRoute<T>(Widget page) => PageRouteBuilder<T>(
+    pageBuilder: (_, __, ___) => page,
+    transitionDuration: Duration.zero,
+    reverseTransitionDuration: Duration.zero,
+    transitionsBuilder: (_, __, ___, child) => child,
+    maintainState: false, // 前画面を保持しない（→ タイマー等は dispose される）
+    opaque: true,
+  );
+
   Widget _buildBottomNavigationBar(BuildContext context, String userId) {
     return Container(
       height: 70,
@@ -535,9 +544,9 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
         children: [
           GestureDetector(
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => ProfileBrowseScreen(currentUserId: userId)),
+                Navigator.of(context).pushAndRemoveUntil(
+                _noAnimRoute(ProfileBrowseScreen(currentUserId: userId)),
+                (route) => false,
               );
             },
             child: Padding(
@@ -561,11 +570,9 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
           ),
           GestureDetector(
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => MatchedUsersScreen(userId: userId),
-                ),
+              Navigator.of(context).pushAndRemoveUntil(
+                _noAnimRoute(MatchedUsersScreen(userId: userId),),
+                (route) => false,
               );
             },
             child: Padding(
@@ -575,11 +582,9 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
           ),
           GestureDetector(
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => UserProfileScreen(userId: userId),
-                ),
+              Navigator.of(context).pushAndRemoveUntil(
+                _noAnimRoute(UserProfileScreen(userId: userId),),
+                (route) => false,
               );
             },
             child: Padding(

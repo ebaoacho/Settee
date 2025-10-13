@@ -793,3 +793,23 @@ class Report(models.Model):
 
     def __str__(self):
         return f"Report(id={self.id}, target={self.target_user.user_id}, read={self.read})"
+    
+# --- App Storeの original_transaction_id ↔ ユーザー のマッピング ---
+class AppStoreTransaction(models.Model):
+    original_transaction_id = models.CharField(max_length=64, unique=True, db_index=True)
+    user = models.ForeignKey(UserProfile, related_name='appstore_txns', on_delete=models.CASCADE)
+    product_id = models.CharField(max_length=128, blank=True, default='')
+    environment = models.CharField(max_length=16, blank=True, default='')  # 'Sandbox' | 'Production' | 'PROD'
+    revoked = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'appstore_transaction'
+        indexes = [
+            models.Index(fields=['user']),
+            models.Index(fields=['environment']),
+        ]
+
+    def __str__(self):
+        return f"{self.original_transaction_id} -> {self.user.user_id} ({self.product_id})"

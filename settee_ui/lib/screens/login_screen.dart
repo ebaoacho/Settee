@@ -82,10 +82,10 @@ class _LoginScreenState extends State<LoginScreen> {
               }
             } else {
               // 失敗しても通常ログイン自体は成功なので、デバッグ出力のみに留める
-              debugPrint('admin token issue failed: ${adminRes.statusCode} ${adminRes.body}');
+              // debugPrint('admin token issue failed: ${adminRes.statusCode} ${adminRes.body}');
             }
           } catch (e) {
-            debugPrint('admin token error: $e');
+            // debugPrint('admin token error: $e');
           }
         }
 

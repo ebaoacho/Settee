@@ -25,9 +25,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv("SECRET_KEY")
+APPSTORE_SHARED_SECRET = os.getenv("APPSTORE_SHARED_SECRET")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
 SIMPLE_TOKEN_SALT = 'admin.simpletoken.v1'  # 任意の識別子。変えると既存トークンは全失効
 SIMPLE_TOKEN_TTL_SECONDS = 900              # 例: 15分
@@ -161,6 +162,29 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# ===== App Store / IAP settings =====
+
+# あなたの iOS アプリの Bundle Identifier に正確に合わせてください
+APPSTORE_BUNDLE_ID = "jp.lavenext.settee"
+
+# StoreKit 2 (JWS) 検証で使う Apple のルート/中間証明書（PEM）
+APPSTORE_JWS_ROOT_PEMS = [
+    "/etc/ssl/apple/AppleRootCA-G3.pem",
+    "/etc/ssl/apple/AppleWWDRCAG4.pem",
+]
+
+# 切り分け用（署名検証が落ちても bundleId / productId が自社のものなら一時的に受け入れる）
+# 原因が分かったら必ず False に戻してください
+APPSTORE_JWS_SOFT_ACCEPT = True
+
+# 署名検証が落ちた時に debug 情報を JSON に含める（本番安定後は False 推奨）
+APPSTORE_JWS_DEBUG = True
+
+# レガシー verifyReceipt のエンドポイント
+APPSTORE_RECEIPT_PRODUCTION_URL = "https://buy.itunes.apple.com/verifyReceipt"
+APPSTORE_RECEIPT_SANDBOX_URL    = "https://sandbox.itunes.apple.com/verifyReceipt"
+
 
 MEDIA_ROOT = os.path.join(BASE_DIR, 'images')
 MEDIA_URL = '/images/'

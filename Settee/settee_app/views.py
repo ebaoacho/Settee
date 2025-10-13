@@ -1,11 +1,16 @@
 import os
 import re
+import base64
+from urllib.parse import unquote
 import json
 import time
+import requests
+import logging
 import mimetypes
 import shutil
 import unicodedata
-# from distutils.util import strtobool
+from typing import Optional
+from zoneinfo import ZoneInfo
 from datetime import timedelta
 from django.db import IntegrityError, transaction, models
 from django.conf import settings
@@ -18,7 +23,7 @@ from django.core.validators import EmailValidator
 from django.core.exceptions import ValidationError
 from django.shortcuts import get_object_or_404
 from django.db import IntegrityError
-from django.db.models import Count, Subquery, F, Q
+from django.db.models import Prefetch, Count, Subquery, F, Q
 from django.http import JsonResponse, FileResponse, Http404
 from django.views.decorators.http import require_http_methods
 from rest_framework.authentication import BaseAuthentication, get_authorization_header
@@ -29,9 +34,16 @@ from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 from rest_framework import status
-from datetime import date
-from .models import UserProfile, Conversation, ConversationMember, ConversationKind, LikeAction, Message, Block, UserTicket, ImageAsset, Report, LikeType, Match
+from datetime import date, datetime
+from .models import UserProfile, Conversation, ConversationMember, ConversationKind, LikeAction, Message, Block, UserTicket, ImageAsset, Report, LikeType, Match, AppStoreTransaction
 from .serializers import UserProfileSerializer, LikeActionSerializer, MessageSerializer, ReportSerializer
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding as asy_padding, ec, rsa
+from cryptography.hazmat.primitives.asymmetric.utils import Prehashed
+from cryptography.hazmat.backends import default_backend
+
+logger = logging.getLogger(__name__)
 
 @api_view(['POST'])
 def register_user(request):
@@ -1051,22 +1063,89 @@ def invite_to_conversation(request):
 # ------------- 新規: 会話一覧（ユーザ別） -------------
 @api_view(['GET'])
 def list_conversations_for_user(request, user_id: str):
+    """
+    会話一覧（自分が在室の会話のみ）
+    - members は left_at IS NULL の在室メンバーだけ返す
+    - 各メンバー: user_id / nickname / role / invited_by（user_id）/ joined_at / left_at(None)
+    - matched_pair: [user_id_a, user_id_b] を常に含める（double/dm 共通）
+    - ブロック相手を含む会話は除外（片方向でも除外）
+    - 並び順: last_message_at desc → updated_at desc → id desc
+    """
+    # 自分の存在確認
     try:
-        u = UserProfile.objects.get(user_id=user_id)
+        me = UserProfile.objects.get(user_id=user_id)
     except UserProfile.DoesNotExist:
         return Response({'error': 'USER_NOT_FOUND'}, status=404)
 
-    mems = (ConversationMember.objects
-            .select_related('conversation')
-            .filter(user=u, left_at__isnull=True))
-    data = [{
-        'id': m.conversation.id,
-        'kind': m.conversation.kind,
-        'title': m.conversation.title,
-        'members': [mm.user.user_id for mm in m.conversation.members.select_related('user')],
-        'updated_at': m.conversation.updated_at.isoformat(),
-        'last_message_at': m.conversation.last_message_at.isoformat() if m.conversation.last_message_at else None,
-    } for m in mems]
+    # ブロック集合（片方向でも）
+    blocked_outgoing = set(Block.objects
+                           .filter(blocker=me)
+                           .values_list('blocked__user_id', flat=True))
+    blocked_incoming = set(Block.objects
+                           .filter(blocked=me)
+                           .values_list('blocker__user_id', flat=True))
+    blocked_any = blocked_outgoing | blocked_incoming
+
+    # 会話メンバー（自分が在室）をベースに、会話と在室メンバーを一括プリフェッチ
+    # matched_pair_* は select_related で同時取得
+    base_qs = (ConversationMember.objects
+               .select_related(
+                   'conversation',
+                   'conversation__matched_pair_a',
+                   'conversation__matched_pair_b',
+               )
+               .filter(user=me, left_at__isnull=True)
+               # ブロック相手を含む会話は一覧から除外
+               .exclude(conversation__members__user__user_id__in=blocked_any)
+               .order_by('-conversation__last_message_at',
+                         '-conversation__updated_at',
+                         '-conversation__id')
+               .distinct())
+
+    # 会話の在室メンバーを事前に取得（user / invited_by を同時に）
+    members_qs = (ConversationMember.objects
+                  .filter(left_at__isnull=True)
+                  .select_related('user', 'invited_by')
+                  .order_by('joined_at', 'id'))
+
+    mems = base_qs.prefetch_related(
+        Prefetch('conversation__members', queryset=members_qs)
+    )
+
+    def _iso(dt):
+        return dt.isoformat() if dt else None
+
+    data = []
+    for m in mems:
+        conv = m.conversation
+
+        # matched_pair（常に2要素 or None を返す）
+        mp_a = getattr(conv.matched_pair_a, 'user_id', None)
+        mp_b = getattr(conv.matched_pair_b, 'user_id', None)
+        matched_pair = [x for x in (mp_a, mp_b) if x]
+
+        # 在室メンバーを詳細でシリアライズ
+        members_payload = []
+        for cm in conv.members.all():  # Prefetch 済み（left_at NULL のみ）
+            members_payload.append({
+                'user_id'   : cm.user.user_id if cm.user_id else None,
+                'nickname'  : cm.user.nickname if cm.user_id else None,
+                'role'      : cm.role or 'member',
+                'invited_by': (cm.invited_by.user_id if cm.invited_by_id else None),
+                'joined_at' : _iso(cm.joined_at),
+                'left_at'   : None,  # 在室のみ返しているため常に None
+            })
+
+        data.append({
+            'id'             : conv.id,
+            'kind'           : conv.kind,                 # 'dm' | 'double' | 'group'
+            'title'          : conv.title or '',
+            'matched_pair'   : matched_pair,              # ★ これをフロントで相手判定に使用
+            'members'        : members_payload,           # ★ invited_by/role を含む
+            'updated_at'     : _iso(conv.updated_at),
+            'last_message_at': _iso(conv.last_message_at),
+        })
+
     return Response(data, status=200)
 
 # ------------- 新規: 会話に送信/取得 -------------
@@ -1540,52 +1619,72 @@ def exchange_ticket(request, user_id):
     }, status=200)
 
 @api_view(['GET'])
-def get_user_entitlements(request, user_id):
+def get_user_entitlements(request, user_id: str):
     try:
         user = UserProfile.objects.get(user_id=user_id)
     except UserProfile.DoesNotExist:
         return Response({'error': 'ユーザーが存在しません'}, status=404)
 
+    # ❶ ここが超重要：現在時点の枠を正しく整えて DB にも保存
+    user.ensure_quotas_now(save=True)
+
     now = timezone.now()
 
-    settee_points        = int(getattr(user, 'settee_points', 0) or 0)
-    message_like_credits = int(getattr(user, 'message_like_credits', 0) or 0)
-    super_like_credits   = int(getattr(user, 'super_like_credits', 0) or 0)
-    treat_like_credits   = int(getattr(user, 'treat_like_credits', 0) or 0)
-    refine_unlocked      = bool(getattr(user, 'refine_unlocked', False))
+    # ❷ 新仕様：モデルの集約返却をそのまま使う
+    ent = user.get_entitlements()  # ← あなたのモデル内で定義済み
 
-    boost_until        = getattr(user, 'boost_until', None)
-    private_mode_until = getattr(user, 'private_mode_until', None)
-    settee_plus_until  = getattr(user, 'settee_plus_until', None)
-    settee_vip_until  = getattr(user, 'settee_vip_until', None)
+    # ent の例:
+    # {
+    #   'tier': 'VIP' | 'PLUS' | 'NORMAL',
+    #   'like_unlimited': bool,
+    #   'normal_like_remaining': None or int,
+    #   'normal_like_reset_at': None or datetime,
+    #   'super_like_credits': int,
+    #   'treat_like_credits': int,
+    #   'message_like_credits': int,
+    #   'backtrack_enabled': bool,
+    #   'boost_active': bool,
+    #   'private_mode_active': bool,
+    #   'settee_plus_active': bool,
+    # }
 
+    # ❸ 追加で until 系や refine など、旧レスポンス項目もフォロー（互換維持）
     def iso(dt): return dt.isoformat() if dt else None
 
-    data = {
-        'user_id'            : user.user_id,
-        'settee_points'      : settee_points,
-        'message_like_credits': message_like_credits,
-        'super_like_credits' : super_like_credits,
-        'treat_like_credits' : treat_like_credits,
-        'refine_unlocked'    : refine_unlocked,
-        'settee_plus_until'  : iso(settee_plus_until),
-        'settee_vip_until'  : iso(settee_vip_until),
-        'boost_until'        : iso(boost_until),
-        'private_mode_until' : iso(private_mode_until),
+    payload = {
+        'tier': ent.get('tier'),
+        'like_unlimited': ent.get('like_unlimited'),
+        'normal_like_remaining': ent.get('normal_like_remaining'),
+        'normal_like_reset_at': ent.get('normal_like_reset_at'),
+        'super_like_credits': ent.get('super_like_credits', 0),
+        'treat_like_credits': ent.get('treat_like_credits', 0),
+        'message_like_credits': ent.get('message_like_credits', 0),
+        'backtrack_enabled': ent.get('backtrack_enabled', False),
+        'boost_active': ent.get('boost_active', False),
+        'private_mode_active': ent.get('private_mode_active', False),
+        'settee_plus_active': ent.get('settee_plus_active', False),
 
-        # サーバ時刻で判定したブールを返す
-        'can_message_like'   : message_like_credits > 0,
-        'can_super_like'     : super_like_credits > 0,
-        'settee_plus_active' : bool(settee_plus_until  and settee_plus_until  > now),
-        'settee_vip_active'  : bool(settee_vip_until   and settee_vip_until   > now),
-        'boost_active'       : bool(boost_until        and boost_until        > now),
-        'private_mode_active': bool(private_mode_until and private_mode_until > now),
-        'can_refine'         : refine_unlocked,
+        'user_id': user.user_id,
+        'settee_points': int(getattr(user, 'settee_points', 0) or 0),
+        'refine_unlocked': bool(getattr(user, 'refine_unlocked', False)),
+        'settee_plus_until': iso(getattr(user, 'settee_plus_until', None)),
+        'settee_vip_until':  iso(getattr(user, 'settee_vip_until', None)),
+        'boost_until':        iso(getattr(user, 'boost_until', None)),
+        'private_mode_until': iso(getattr(user, 'private_mode_until', None)),
+        'can_message_like': (ent.get('message_like_credits', 0) or 0) > 0,
+        'can_super_like':   (ent.get('super_like_credits', 0) or 0) > 0,
+        'settee_vip_active':  (user.settee_vip_until  and user.settee_vip_until  > now) or (ent.get('tier') == 'VIP'),
+        'settee_plus_active': (user.settee_plus_until and user.settee_plus_until > now) or (ent.get('tier') == 'PLUS'),
 
-        # 参照用にサーバ時刻も返す（ログ/表示用）
-        'server_time'        : now.isoformat(),
+        # ログ・同期用
+        'server_time': now.isoformat(),
     }
-    return Response(data, status=200)
+
+    # 最後に datetime を ISO 文字列へ（get_entitlements が datetime を返す想定ならここで正規化）
+    if isinstance(payload.get('normal_like_reset_at'), timezone.datetime.__mro__[0]):
+        payload['normal_like_reset_at'] = iso(payload['normal_like_reset_at'])
+
+    return Response(payload, status=200)
 
 @api_view(['POST'])
 def use_ticket(request, user_id, ticket_id):
@@ -2492,3 +2591,607 @@ def admin_kyc_delete_user(request, user_id: str):
         {"ok": True, "deleted_dirs": {"kyc": kyc_deleted, "public": public_deleted}},
         status=200
     )
+    
+# ===== App Store レシート検証 & 権限更新 =====
+UTC = ZoneInfo("UTC")
+
+PLUS_PREFIX = 'jp.settee.app.plus.'
+VIP_PREFIX  = 'jp.settee.app.vip.'
+
+APPLE_VERIFY_PROD = getattr(settings, 'APPSTORE_RECEIPT_PRODUCTION_URL',
+                            'https://buy.itunes.apple.com/verifyReceipt')
+APPLE_VERIFY_SBX  = getattr(settings, 'APPSTORE_RECEIPT_SANDBOX_URL',
+                            'https://sandbox.itunes.apple.com/verifyReceipt')
+
+def _to_aware_utc_from_ms(ms: str | int | None):
+    """ミリ秒 Epoch -> aware UTC datetime"""
+    if not ms:
+        return None
+    try:
+        ms_int = int(ms)
+        dt = datetime.utcfromtimestamp(ms_int / 1000.0).replace(tzinfo=UTC)
+        return dt
+    except Exception:
+        return None
+
+def _apple_verify_receipt(receipt_b64: str, *, force_sandbox: bool | None = None) -> dict:
+    """Legacy verifyReceipt（本番→21007ならSBX，再試行）。"""
+    if not settings.APPSTORE_SHARED_SECRET:
+        return {'status': -1, 'error': 'APPSTORE_SHARED_SECRET is not configured'}
+
+    payload = {
+        "receipt-data": receipt_b64,
+        "password": settings.APPSTORE_SHARED_SECRET,
+        "exclude-old-transactions": True,
+    }
+
+    def _post(url):
+        try:
+            resp = requests.post(url, json=payload, timeout=10)
+            return resp.json()
+        except Exception as e:
+            logger.exception("verifyReceipt network error")
+            return {'status': -1, 'error': f'network_error: {e}'}
+
+    if not force_sandbox:
+        j = _post(APPLE_VERIFY_PROD)
+        if j and j.get('status') == 21007:
+            j = _post(APPLE_VERIFY_SBX)
+        return j or {'status': -1, 'error': 'empty response from Apple'}
+
+    j = _post(APPLE_VERIFY_SBX)
+    if j and j.get('status') == 21008:
+        j = _post(APPLE_VERIFY_PROD)
+    return j or {'status': -1, 'error': 'empty response from Apple'}
+
+def _effective_expiry(item: dict):
+    """1行のトランザクションから有効期限を決定。"""
+    if item.get('cancellation_date_ms'):
+        return None
+    exp = _to_aware_utc_from_ms(item.get('expires_date_ms'))
+    if not exp:
+        return None
+    grace = _to_aware_utc_from_ms(item.get('grace_period_expires_date_ms'))
+    if grace and grace > exp:
+        return grace
+    return exp
+
+def _serialize_entitlements_payload(user: UserProfile) -> dict:
+    now = timezone.now()
+    ent = user.get_entitlements()
+    def iso(dt): return dt.isoformat() if dt else None
+    payload = {
+        'tier': ent.get('tier'),
+        'like_unlimited': ent.get('like_unlimited'),
+        'normal_like_remaining': ent.get('normal_like_remaining'),
+        'normal_like_reset_at': ent.get('normal_like_reset_at'),
+        'super_like_credits': ent.get('super_like_credits', 0),
+        'treat_like_credits': ent.get('treat_like_credits', 0),
+        'message_like_credits': ent.get('message_like_credits', 0),
+        'backtrack_enabled': ent.get('backtrack_enabled', False),
+        'boost_active': ent.get('boost_active', False),
+        'private_mode_active': ent.get('private_mode_active', False),
+        'settee_plus_active': ent.get('settee_plus_active', False),
+
+        'user_id': user.user_id,
+        'settee_points': int(getattr(user, 'settee_points', 0) or 0),
+        'refine_unlocked': bool(getattr(user, 'refine_unlocked', False)),
+        'settee_plus_until': iso(getattr(user, 'settee_plus_until', None)),
+        'settee_vip_until':  iso(getattr(user, 'settee_vip_until', None)),
+        'boost_until':        iso(getattr(user, 'boost_until', None)),
+        'private_mode_until': iso(getattr(user, 'private_mode_until', None)),
+        'can_message_like': (ent.get('message_like_credits', 0) or 0) > 0,
+        'can_super_like':   (ent.get('super_like_credits', 0) or 0) > 0,
+        'settee_vip_active':  (user.settee_vip_until  and user.settee_vip_until  > now) or (ent.get('tier') == 'VIP'),
+        'settee_plus_active': (user.settee_plus_until and user.settee_plus_until > now) or (ent.get('tier') == 'PLUS'),
+        'server_time': now.isoformat(),
+    }
+    if isinstance(payload.get('normal_like_reset_at'), timezone.datetime.__mro__[0]):
+        payload['normal_like_reset_at'] = (payload['normal_like_reset_at'].isoformat()
+                                           if payload['normal_like_reset_at'] else None)
+    return payload
+
+def _update_user_entitlements_by_product(
+    user: UserProfile,
+    product_id: str,
+    expires_at,  # aware datetime or None
+    *,
+    allow_downgrade: bool = False,
+    save_now: bool = True,
+):
+    """product_id に応じて Plus/VIP の期限を書き換え。"""
+    field = None
+    if product_id.startswith(PLUS_PREFIX):
+        field = 'settee_plus_until'
+    elif product_id.startswith(VIP_PREFIX):
+        field = 'settee_vip_until'
+    else:
+        return []
+
+    current = getattr(user, field, None)
+    changed = False
+
+    if expires_at is None:
+        if allow_downgrade and current is not None:
+            setattr(user, field, None)
+            changed = True
+    else:
+        if current is None or expires_at > current or allow_downgrade:
+            setattr(user, field, expires_at)
+            changed = True
+
+    if changed and save_now:
+        user.save(update_fields=[field])
+
+    return [field] if changed else []
+
+def _apply_entitlements_from_apple_receipt(user: UserProfile, apple_json: dict) -> dict:
+    """verifyReceipt 結果 → Plus/VIP 期限を更新 → 最新エンタイトルメントを返す。"""
+    status = int(apple_json.get('status', -1))
+    if status != 0 and status != 21006:
+        return {'ok': False, 'status': status, 'apple': apple_json}
+
+    latest = apple_json.get('latest_receipt_info') or []
+    if not latest:
+        receipt = apple_json.get('receipt') or {}
+        latest = receipt.get('in_app') or []
+
+    changed_fields = []
+    for item in latest:
+        pid = item.get('product_id') or ''
+        eff = _effective_expiry(item)
+        allow_down = bool(item.get('cancellation_date_ms'))
+        changed_fields += _update_user_entitlements_by_product(
+            user, pid, eff, allow_downgrade=allow_down, save_now=False
+        )
+
+    if changed_fields:
+        user.save(update_fields=list(set(changed_fields)))
+
+    user.ensure_quotas_now(save=True)
+    return {'ok': True, 'status': 0, 'entitlements': _serialize_entitlements_payload(user)}
+
+# ======== JWS ユーティリティ（x5c署名検証） ========
+
+def _b64url_decode(data: str) -> bytes:
+    s = data + "=" * ((4 - len(data) % 4) % 4)
+    return base64.urlsafe_b64decode(s.encode('utf-8'))
+
+def _load_cert_any(path: str):
+    if not path:
+        return None
+    try:
+        data = open(path, 'rb').read()
+        try:
+            return x509.load_pem_x509_certificate(data, default_backend())
+        except ValueError:
+            return x509.load_der_x509_certificate(data, default_backend())
+    except Exception:
+        logger.exception("Failed to load certificate: %s", path)
+        return None
+
+def _load_roots_from_settings():
+    """Apple Root/中間を settings から読み込む（複数対応）。無ければ標準場所を使う。"""
+    roots = []
+    paths = []
+
+    pems = getattr(settings, 'APPSTORE_JWS_ROOT_PEMS', None)
+    if pems:
+        paths.extend(pems)
+    single = getattr(settings, 'APPSTORE_JWS_ROOT_PEM', None)
+    if single:
+        paths.append(single)
+
+    if not paths:
+        paths = [
+            '/etc/ssl/apple/AppleRootCA-G3.pem',
+            '/etc/ssl/apple/AppleWWDRCAG4.pem',
+        ]
+
+    for p in paths:
+        c = _load_cert_any(str(p))
+        if c:
+            roots.append(c)
+    return roots
+
+def _verify_chain_x5c(leaf: x509.Certificate, chain: list[x509.Certificate], root_candidates: list[x509.Certificate]) -> bool:
+    """
+    簡易チェーン検証：署名・NotBefore/After・issuer/subject の連鎖。
+    """
+    now = timezone.now()
+    certs = [leaf] + (chain or [])
+
+    # 期限チェック
+    for c in certs:
+        nbf = c.not_valid_before
+        naf = c.not_valid_after
+        if nbf.tzinfo is None:
+            nbf = nbf.replace(tzinfo=UTC)
+        if naf.tzinfo is None:
+            naf = naf.replace(tzinfo=UTC)
+        if nbf > now or naf < now:
+            logger.warning("x5c time window invalid: subj=%s nbf=%s naf=%s now=%s",
+                           c.subject.rfc4514_string(), nbf, naf, now)
+            return False
+
+    # 連鎖署名検証
+    for i in range(len(certs) - 1):
+        child = certs[i]
+        parent = certs[i+1]
+        if child.issuer != parent.subject:
+            logger.warning("x5c chain mismatch: child.issuer=%s parent.subject=%s",
+                           child.issuer.rfc4514_string(), parent.subject.rfc4514_string())
+            return False
+        pub = parent.public_key()
+        try:
+            hash_alg = getattr(child, "signature_hash_algorithm", None) or hashes.SHA256()
+            if isinstance(pub, ec.EllipticCurvePublicKey):
+                pub.verify(child.signature, child.tbs_certificate_bytes, ec.ECDSA(hash_alg))
+            else:
+                pub.verify(child.signature, child.tbs_certificate_bytes, asy_padding.PKCS1v15(), hash_alg)
+        except Exception:
+            logger.exception("x5c parent verify failed: child=%s parent=%s",
+                             child.subject.rfc4514_string(), parent.subject.rfc4514_string())
+            return False
+
+    # 末尾を Root でアンカー
+    last = certs[-1]
+    for root in root_candidates:
+        if not root:
+            continue
+        try:
+            if last.issuer == root.subject:
+                rpub = root.public_key()
+                if isinstance(rpub, ec.EllipticCurvePublicKey):
+                    rpub.verify(last.signature, last.tbs_certificate_bytes, ec.ECDSA(hashes.SHA256()))
+                else:
+                    rpub.verify(last.signature, last.tbs_certificate_bytes, asy_padding.PKCS1v15(), hashes.SHA256())
+                return True
+        except Exception:
+            continue
+
+    logger.warning("x5c anchor not found. last.issuer=%s, roots=[%s]",
+                   last.issuer.rfc4514_string(),
+                   ", ".join(r.subject.rfc4514_string() for r in root_candidates if r))
+    return False
+
+def _jws_peek_payload(jws: str) -> dict:
+    """署名検証せず payload だけ取り出す（切り分け用）。"""
+    try:
+        parts = jws.split('.')
+        if len(parts) != 3:
+            return {}
+        p_b64 = parts[1]
+        return json.loads(_b64url_decode(p_b64).decode('utf-8'))
+    except Exception:
+        return {}
+
+def _jws_decode_verified(jws: str) -> tuple[bool, dict]:
+    """
+    x5c で JWS 署名を検証して payload(JSON) を返す。
+    ルート PEM が未設定なら False。
+    """
+    roots = _load_roots_from_settings()
+    if not roots:
+        logger.warning("No Apple Root PEMs configured; cannot verify JWS.")
+        return False, {}
+
+    try:
+        h_b64, p_b64, s_b64 = jws.split('.')
+    except ValueError:
+        return False, {}
+
+    try:
+        header = json.loads(_b64url_decode(h_b64).decode('utf-8'))
+        payload = json.loads(_b64url_decode(p_b64).decode('utf-8'))
+        sig = _b64url_decode(s_b64)
+    except Exception:
+        return False, {}
+
+    x5c_list = header.get('x5c') or []
+    if not x5c_list:
+        logger.warning("JWS header has no x5c")
+        return False, {}
+
+    def _to_cert(b64der: str) -> x509.Certificate:
+        der = base64.b64decode(b64der.encode('utf-8'))
+        return x509.load_der_x509_certificate(der, default_backend())
+
+    try:
+        leaf = _to_cert(x5c_list[0])
+        chain = [_to_cert(x) for x in x5c_list[1:]]
+    except Exception:
+        logger.exception("Failed to parse x5c certificates")
+        return False, {}
+
+    ok_chain = _verify_chain_x5c(leaf, chain, roots)
+    if not ok_chain:
+        try:
+            logger.warning("JWS x5c chain verify FAILED. leaf=%s issuer=%s alg=%s x5c_len=%d",
+                           leaf.subject.rfc4514_string(), leaf.issuer.rfc4514_string(),
+                           header.get('alg'), len(x5c_list))
+        except Exception:
+            logger.warning("JWS x5c chain verify FAILED (logging failed)")
+        return False, {}
+
+    pub = leaf.public_key()
+    signed = (h_b64 + '.' + p_b64).encode('utf-8')
+    alg = (header.get('alg') or '').upper()
+
+    try:
+        if isinstance(pub, ec.EllipticCurvePublicKey) and alg == 'ES256':
+            pub.verify(sig, signed, ec.ECDSA(hashes.SHA256()))
+        elif isinstance(pub, rsa.RSAPublicKey) and alg in ('RS256', 'RS512'):
+            pub.verify(sig, signed, asy_padding.PKCS1v15(), hashes.SHA256())
+        else:
+            logger.warning("Unsupported JWS alg or key type: alg=%s key=%s", alg, type(pub))
+            return False, {}
+    except Exception:
+        logger.exception("JWS signature verify failed")
+        return False, {}
+
+    return True, payload
+
+def _parse_nested_jws_to_dict(jws_nested: str) -> dict:
+    ok, payload = _jws_decode_verified(jws_nested)
+    if ok and payload:
+        return payload
+    try:
+        h_b64, p_b64, _ = jws_nested.split('.')
+        return json.loads(_b64url_decode(p_b64).decode('utf-8'))
+    except Exception:
+        return {}
+
+def _pick_expiry_from_txn_or_renewal(txn: dict | None, rnw: dict | None):
+    """期限の候補を txn/renewal から抽出。"""
+    txn = txn or {}
+    rnw = rnw or {}
+    if txn.get('revocationDate') or rnw.get('revocationDate'):
+        return None
+    for key in ('gracePeriodExpiresDate',):
+        if rnw.get(key):
+            return _to_aware_utc_from_ms(rnw.get(key))
+    for key in ('expiresDate',):
+        if txn.get(key):
+            return _to_aware_utc_from_ms(txn.get(key))
+    for key in ('expiresDate', 'expirationDate'):
+        if rnw.get(key):
+            return _to_aware_utc_from_ms(rnw.get(key))
+    return None
+
+def _find_user_for_notification(app_account_token: str | None, original_tx_id: str | None) -> Optional['UserProfile']:
+    token = (app_account_token or '').strip()
+    if token:
+        try:
+            return UserProfile.objects.get(user_id=token)
+        except UserProfile.DoesNotExist:
+            pass
+    try:
+        from settee_app.models import AppStoreTransaction
+    except Exception:
+        AppStoreTransaction = None
+    if original_tx_id and AppStoreTransaction:
+        row = (AppStoreTransaction.objects.select_related('user')
+               .filter(original_transaction_id=original_tx_id).first())
+        if row:
+            return row.user
+    return None
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def app_store_notifications(request):
+    """ASSN v2 を受信して反映。"""
+    body = request.data if isinstance(request.data, dict) else {}
+    sp = body.get('signedPayload')
+    if not sp:
+        logger.warning("ASSN: missing signedPayload")
+        return Response({'ok': True, 'handled': False, 'reason': 'missing signedPayload'}, status=200)
+
+    verified, payload = _jws_decode_verified(sp)
+    if not verified:
+        logger.warning("ASSN: JWS not verified (no root pem or invalid)")
+        return Response({'ok': True, 'handled': False, 'reason': 'unverified'}, status=200)
+
+    data = payload.get('data', {}) if isinstance(payload, dict) else {}
+    txn = _parse_nested_jws_to_dict(data.get('signedTransactionInfo') or '')
+    rnw = _parse_nested_jws_to_dict(data.get('signedRenewalInfo') or '')
+
+    notification_type = (payload.get('notificationType') or '').upper()
+    subtype           = (payload.get('subtype') or '') or None
+    environment       = (data.get('environment') or '').upper()
+    product_id        = txn.get('productId') or rnw.get('productId') or ''
+    original_tx_id    = txn.get('originalTransactionId') or rnw.get('originalTransactionId') or ''
+    app_account_token = txn.get('appAccountToken') or rnw.get('appAccountToken')
+
+    revoke_like = notification_type in ('REFUND', 'REVOKE')
+    exp = _pick_expiry_from_txn_or_renewal(txn, rnw)
+    if revoke_like:
+        exp = None
+
+    user = _find_user_for_notification(app_account_token, original_tx_id)
+
+    handled = False
+    changed_fields = []
+    ent_payload = None
+
+    if user and product_id:
+        try:
+            with transaction.atomic():
+                try:
+                    from settee_app.models import AppStoreTransaction
+                except Exception:
+                    AppStoreTransaction = None
+                if original_tx_id and AppStoreTransaction:
+                    AppStoreTransaction.objects.update_or_create(
+                        original_transaction_id=original_tx_id,
+                        defaults={
+                            'user': user,
+                            'product_id': product_id or '',
+                            'environment': (environment or '').title(),
+                            'revoked': (exp is None),
+                        }
+                    )
+                changed_fields = _update_user_entitlements_by_product(
+                    user, product_id, exp,
+                    allow_downgrade=revoke_like or notification_type in ('EXPIRED', 'GRACE_PERIOD_EXPIRED'),
+                    save_now=True
+                )
+                user.ensure_quotas_now(save=True)
+                ent_payload = _serialize_entitlements_payload(user)
+                handled = True
+        except Exception as e:
+            logger.exception("ASSN: failed to update entitlements: %s", e)
+
+    return Response({
+        'ok': True,
+        'handled': handled,
+        'user_id': getattr(user, 'user_id', None),
+        'product_id': product_id or None,
+        'changed': changed_fields,
+        'notificationType': notification_type,
+        'subtype': subtype,
+        'environment': environment,
+        'entitlements': ent_payload,
+    }, status=200)
+    
+def _jws_peek_header(jws: str) -> dict:
+    try:
+        h_b64 = jws.split('.')[0]
+        return json.loads(_b64url_decode(h_b64).decode('utf-8'))
+    except Exception:
+        return {}
+
+
+# ======== JWS/PKCS#7 自動判別ヘルパ ========
+
+def _parse_bool(v):
+    if isinstance(v, bool): return v
+    if isinstance(v, str): return v.strip().lower() in ("1","true","t","yes","y","on")
+    return False
+
+_B64_STD_RE  = re.compile(r'^[A-Za-z0-9+/=]+$')
+_B64_URL_RE  = re.compile(r'^[A-Za-z0-9\-_]+$')
+
+def _is_probably_jws(s: str) -> bool:
+    return isinstance(s, str) and s.count('.') == 2 and s.startswith('eyJ')
+
+def coerce_base64(s: str, *, allow_urlsafe: bool = True, max_len: int = 200_000) -> str:
+    """verifyReceipt に送る PKCS#7 Base64 を正規化＆厳格検証。"""
+    if not isinstance(s, str):
+        raise ValueError("receipt_data must be string")
+    if _is_probably_jws(s):
+        raise ValueError("looks like JWS, not PKCS7")
+    if '%' in s:
+        try:
+            s = unquote(s)
+        except Exception:
+            pass
+    s = "".join(s.split())
+    if len(s) > max_len:
+        raise ValueError("receipt_data too long")
+    if allow_urlsafe and _B64_URL_RE.fullmatch(s) and ('-' in s or '_' in s):
+        s = s.replace('-', '+').replace('_', '/')
+    pad = (4 - len(s) % 4) % 4
+    if pad:
+        s += '=' * pad
+    base64.b64decode(s, validate=True)
+    return s
+
+# ======== iOS クライアント検証（JWS/PKCS#7 両対応，Sandbox フォールバック可） ========
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def ios_verify_receipt(request):
+    user_id = request.data.get('user_id')
+    receipt = request.data.get('receipt_data')
+    force_sandbox = request.data.get('force_sandbox', None)
+    force_sandbox = _parse_bool(force_sandbox) if force_sandbox is not None else None
+
+    if not user_id or not receipt:
+        return Response({'detail': 'user_id と receipt_data は必須です'}, status=400)
+
+    # ユーザー
+    try:
+        user = UserProfile.objects.get(user_id=user_id)
+    except UserProfile.DoesNotExist:
+        return Response({'detail': 'ユーザーが存在しません'}, status=404)
+    if getattr(user, 'is_banned', False):
+        return Response({'detail': 'アカウントが停止されています'}, status=403)
+
+    # --- JWS / PKCS#7 自動判別 ---
+    if _is_probably_jws(receipt):
+        # StoreKit 2 (JWS)
+        verified, txn = _jws_decode_verified(receipt)
+
+        if not verified:
+            # 追加デバッグ情報を作る
+            hdr  = _jws_peek_header(receipt)
+            peek = _jws_peek_payload(receipt)
+            x5c  = hdr.get('x5c') or []
+            debug_info = {
+                'alg': hdr.get('alg'),
+                'x5c_len': len(x5c),
+                'bundleId': peek.get('bundleId'),
+                'productId': peek.get('productId'),
+                'originalTransactionId': peek.get('originalTransactionId'),
+            }
+            logger.warning("JWS verify failed. alg=%s x5c_len=%s bundleId=%s productId=%s",
+                           debug_info['alg'], debug_info['x5c_len'],
+                           debug_info['bundleId'], debug_info['productId'])
+
+            # ソフト受け入れ（切り分け中のみON推奨）
+            soft = bool(getattr(settings, 'APPSTORE_JWS_SOFT_ACCEPT', False))
+            bundle_ok = (peek.get('bundleId') == getattr(settings, 'APPSTORE_BUNDLE_ID', None))
+            pid = str(peek.get('productId') or '')
+            pid_ok = pid.startswith(PLUS_PREFIX) or pid.startswith(VIP_PREFIX)
+
+            if soft and bundle_ok and pid_ok:
+                logger.warning("JWS SOFT-ACCEPT: using payload without signature verification.")
+                txn = peek
+            else:
+                # DEBUG時は JSON で詳細を返す
+                if bool(getattr(settings, 'APPSTORE_JWS_DEBUG', False)) or settings.DEBUG:
+                    return Response({'ok': False, 'status': -2,
+                                     'detail': 'JWS verify failed',
+                                     'debug': debug_info}, status=400)
+                return Response({'ok': False, 'status': -2, 'detail': 'JWS verify failed'}, status=400)
+
+        product_id = txn.get('productId') or ''
+        exp = _to_aware_utc_from_ms(txn.get('expiresDate'))  # 非サブスクは None でOK
+        revoke = bool(txn.get('revocationDate'))
+        if revoke:
+            exp = None
+
+        try:
+            with transaction.atomic():
+                changed = _update_user_entitlements_by_product(
+                    user, product_id, exp,
+                    allow_downgrade=revoke, save_now=True
+                )
+                user.ensure_quotas_now(save=True)
+        except Exception:
+            logger.exception("Failed to apply entitlements from JWS")
+            return Response({'ok': False, 'status': -3, 'detail': 'apply failed'}, status=500)
+
+        return Response({'ok': True, 'status': 0, 'changed': changed,
+                         'entitlements': _serialize_entitlements_payload(user)}, status=200)
+
+    # ---- 旧式（PKCS#7）: verifyReceipt ----
+    try:
+        receipt_b64 = coerce_base64(str(receipt))
+    except Exception:
+        return Response({'detail': 'receipt_data が不正な Base64 です'}, status=400)
+
+    apple_json = _apple_verify_receipt(receipt_b64, force_sandbox=force_sandbox)
+    st = int(apple_json.get('status', -1))
+    if st not in (0, 21006):
+        return Response({'ok': False, 'status': st, 'apple_raw': apple_json}, status=400)
+
+    try:
+        with transaction.atomic():
+            result = _apply_entitlements_from_apple_receipt(user, apple_json)
+    except Exception:
+        logger.exception("Failed to apply entitlements from Apple receipt")
+        return Response({'ok': False, 'status': -3, 'detail': 'apply failed'}, status=500)
+
+    return Response(result, status=200)
