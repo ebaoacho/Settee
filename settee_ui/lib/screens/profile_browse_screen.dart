@@ -54,6 +54,7 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
   bool isFetching = false;
   bool isLoading = true;
   bool? isMatchMultiple;
+  int _modeSlideSign = 1;
   int currentPageIndex = 0;
   List<DateTime> availableDates = [];
   SearchFilters? _filters;
@@ -162,7 +163,122 @@ class _ProfileBrowseScreenState extends State<ProfileBrowseScreen> {
       if (!mounted) return;
       _bootstrap();
       _checkAndShowUnreadMatchesDialog();
+      _checkAndShowLoginBonus();
     });
+  }
+
+  Future<void> _checkAndShowLoginBonus() async {
+    try {
+      final response = await http.post(
+        Uri.parse('https://settee.jp/check-login-bonus/'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'user_id': widget.currentUserId}),
+      ).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(utf8.decode(response.bodyBytes));
+        final loginBonus = data['login_bonus'] as Map<String, dynamic>?;
+
+        // ログインボーナスが付与された場合のみダイアログ表示
+        if (loginBonus != null && (loginBonus['total_granted'] as int? ?? 0) > 0) {
+          if (!mounted) return;
+          await _showLoginBonusDialog(loginBonus);
+        }
+      }
+    } catch (e) {
+      // エラーは無視（ログインボーナスは必須機能ではない）
+      debugPrint('Login bonus check error: $e');
+    }
+  }
+
+  Future<void> _showLoginBonusDialog(Map<String, dynamic> bonus) async {
+    if (!mounted) return;
+
+    final consecutiveDays = bonus['consecutive_days'] as int? ?? 0;
+    final dailyBonus = bonus['daily_bonus'] as int? ?? 0;
+    final streakBonus = bonus['streak_bonus'] as int? ?? 0;
+    final currentPoints = bonus['current_points'] as int? ?? 0;
+
+    return showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: const [
+            Icon(Icons.card_giftcard, color: Colors.orange, size: 28),
+            SizedBox(width: 8),
+            Text('ログインボーナス', style: TextStyle(color: Colors.white)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (dailyBonus > 0)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'デイリーボーナス: +${dailyBonus}pt',
+                  style: const TextStyle(fontSize: 16, color: Colors.white),
+                ),
+              ),
+            if (streakBonus > 0)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  '🎉 7日連続ログインボーナス: +${streakBonus}pt',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.orange,
+                  ),
+                ),
+              ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Icon(Icons.local_fire_department, color: Colors.orange, size: 20),
+                const SizedBox(width: 4),
+                Text(
+                  '連続ログイン: ${consecutiveDays}日目',
+                  style: const TextStyle(color: Colors.white70, fontSize: 14),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.stars, color: Colors.orange, size: 18),
+                  const SizedBox(width: 6),
+                  Text(
+                    '現在のポイント: ${currentPoints}pt',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('閉じる', style: TextStyle(color: Colors.orange)),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _checkAndShowUnreadMatchesDialog() async {
@@ -737,7 +853,7 @@ _logEnt('after fetchEntitlements');
   }
 
   void _fetchCurrentUserMatchMode() async {
-    final url = Uri.parse('https://settee.jp/user-profile/${widget.currentUserId}/');
+    final url = Uri.parse('https://settee.jp/get-profile/${widget.currentUserId}/');
     final response = await http.get(url);
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
@@ -769,8 +885,8 @@ _logEnt('after fetchEntitlements');
       highlightAsCircle: false,
     ),
     _GuidePage(
-      title: '友だちと一緒に\nDobleマッチしよう',
-      message: 'マッチした後に友だちを\nチャットに招待し\nDobleマッチをしよう',
+      title: '友だちと一緒に\nDoubleマッチしよう',
+      message: 'マッチした後に友だちを\nチャットに招待し\nDoubleマッチをしよう',
       arrow: BubbleArrowDirection.up,
       bubbleAlignment: Alignment.topCenter,
       edgePadding: const EdgeInsets.only(top: 90, left: 24, right: 24),
@@ -799,7 +915,7 @@ _logEnt('after fetchEntitlements');
       bubbleAlignment: Alignment.topCenter,
       edgePadding: const EdgeInsets.only(top: 90, left: 24, right: 24),
       arrowOffset: 0.10,
-      imageAsset: 'assets/logo.png',
+      imageAsset: 'assets/settee_point.png',
       highlightTarget: _TutorialTarget.pointsBadge,
       highlightPadding: const EdgeInsets.all(8),
       highlightAsCircle: true,
@@ -809,9 +925,9 @@ _logEnt('after fetchEntitlements');
       message: '1週間のカレンダーであなたと\n同じ日にちが空いている\nユーザーを優先して表示しよう！',
       arrow: BubbleArrowDirection.up,
       bubbleAlignment: Alignment.topCenter,
-      edgePadding: const EdgeInsets.only(top: 100, left: 24, right: 24),
+      edgePadding: const EdgeInsets.only(top: 90, left: 24, right: 24),
       arrowOffset: 0.50,
-      imageAsset: 'assets/logo.png',
+      imageAsset: 'assets/calendar.png',
       highlightTarget: _TutorialTarget.calendar,
       highlightPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       highlightAsCircle: false,
@@ -1138,7 +1254,13 @@ _logEnt('after fetchEntitlements');
     final map = userImageUrls[userId];
 
     if (map == null) {
-      return const Center(child: CircularProgressIndicator());
+      return Center(
+        child: Image.asset(
+          'assets/loading_logo.gif',
+          width: 80,
+          height: 80,
+        ),
+      );
     }
     if (map.isEmpty) {
       return const Center(child: Text('画像がありません', style: TextStyle(color: Colors.white)));
@@ -1173,6 +1295,25 @@ _logEnt('after fetchEntitlements');
             fit: BoxFit.cover,
             errorBuilder: (_, __, ___) =>
                 const Center(child: Text('画像を読み込めません', style: TextStyle(color: Colors.white))),
+          ),
+          // グラデーションレイヤー（上部透明→下部黒）
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.transparent,
+                    Colors.transparent,
+                    Colors.black.withValues(alpha: 0.3),
+                    Colors.black.withValues(alpha: 0.7),
+                    Colors.black.withValues(alpha: 0.9),
+                  ],
+                  stops: const [0.0, 0.4, 0.6, 0.8, 1.0],
+                ),
+              ),
+            ),
           ),
           Positioned(
             bottom: 100,
@@ -1693,28 +1834,35 @@ _logEnt('after fetchEntitlements');
         clipBehavior: Clip.none,
         children: [
           Icon(Icons.tune_rounded, color: color),
-          if (!enabled)
-            Positioned(
-              right: -6, top: -6,
-              child: Container(
-                width: 16, height: 16,
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.65),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white24),
-                ),
-                child: const Icon(Icons.lock_rounded, color: Colors.white70, size: 10),
-              ),
-            ),
         ],
       ),
+    );
+  }
+
+  Route<T> _slideRoute<T>(Widget page, {AxisDirection direction = AxisDirection.left}) {
+    Offset begin;
+    switch (direction) {
+      case AxisDirection.left:  begin = const Offset(1.0, 0.0);  break; // → からスライドイン
+      case AxisDirection.right: begin = const Offset(-1.0, 0.0); break; // ← からスライドイン
+      case AxisDirection.up:    begin = const Offset(0.0, 1.0);  break;
+      case AxisDirection.down:  begin = const Offset(0.0, -1.0); break;
+    }
+    return PageRouteBuilder<T>(
+      pageBuilder: (_, __, ___) => page,
+      transitionsBuilder: (_, anim, __, child) {
+        final tween = Tween(begin: begin, end: Offset.zero)
+            .chain(CurveTween(curve: Curves.easeOutCubic));
+        return SlideTransition(position: anim.drive(tween), child: child);
+      },
+      transitionDuration: const Duration(milliseconds: 280),
+      reverseTransitionDuration: const Duration(milliseconds: 220),
     );
   }
 
   Widget _buildTopNavigationBar(
     BuildContext context,
     String userId,
-    bool matchMultiple,
+    bool? matchMultiple,
     void Function(bool) onToggleMatch,
     String? gender
   ) {
@@ -1732,9 +1880,7 @@ _logEnt('after fetchEntitlements');
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(
-                    builder: (context) => PointExchangeScreen(userId: userId),
-                  ),
+                  _slideRoute(PointExchangeScreen(userId: userId), direction: AxisDirection.left),
                 );
               },
               child: Container(
@@ -1767,7 +1913,7 @@ _logEnt('after fetchEntitlements');
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => AreaSelectionScreen(userId: userId)),
+                  _slideRoute(AreaSelectionScreen(userId: userId), direction: AxisDirection.left),
                 );
               },
               child: const Icon(Icons.place, color: Colors.white),
@@ -1784,7 +1930,7 @@ _logEnt('after fetchEntitlements');
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const Icon(Icons.group, color: Colors.white),
-                  if (matchMultiple)
+                  if (matchMultiple == true) // ← 取得済みで true のときだけ下線
                     Container(
                       margin: const EdgeInsets.only(top: 2),
                       height: 2,
@@ -1806,7 +1952,7 @@ _logEnt('after fetchEntitlements');
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const Icon(Icons.person, color: Colors.white),
-                  if (!matchMultiple)
+                  if (matchMultiple == false) // ← 取得済みで false のときだけ下線
                     Container(
                       margin: const EdgeInsets.only(top: 2),
                       height: 2,
@@ -1826,22 +1972,65 @@ _logEnt('after fetchEntitlements');
   }
 
   void _updateMatchMultiple(String userId, bool value) async {
-    final url = Uri.parse('https://settee.jp/user-profile/$userId/update-match-multiple/');
-    final response = await http.post(
-      url,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'match_multiple': value}),
-    );
+    // 同値なら何もしない
+    if (isMatchMultiple == value) return;
 
-    if (response.statusCode == 200) {
-      setState(() {
-        isMatchMultiple = value;
-        profiles.clear();
-        currentPageIndex = 0;
-      });
-      await _fetchProfiles();
-    } else {
-      // debugPrint("更新失敗: ${response.body}");
+    // 楽観更新：先にUI反映→失敗時ロールバック
+    final prev = isMatchMultiple;
+    setState(() => isMatchMultiple = value);
+
+    final url = Uri.parse('https://settee.jp/user-profile/$userId/update-match-multiple/');
+
+    try {
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'match_multiple': value}),
+      );
+
+      if (response.statusCode == 200) {
+        if (!mounted) return;
+
+        // 即座にローディング状態にして古い画像を隠す
+        setState(() {
+          isLoading = true;
+        });
+
+        // 少し待ってからプロファイル更新（アニメーション効果のため）
+        await Future.delayed(const Duration(milliseconds: 200));
+
+        if (!mounted) return;
+
+        // プロファイルクリア＆取得
+        setState(() {
+          profiles.clear();
+          currentPageIndex = 0;
+        });
+
+        await _fetchProfiles();
+
+        if (mounted) {
+          setState(() {
+            isLoading = false;  // ローディング解除
+          });
+        }
+      } else {
+        // 失敗 → ロールバック
+        if (mounted) {
+          setState(() => isMatchMultiple = prev);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('更新に失敗しました')),
+          );
+        }
+      }
+    } catch (_) {
+      // 例外 → ロールバック
+      if (mounted) {
+        setState(() => isMatchMultiple = prev);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('通信エラーが発生しました')),
+        );
+      }
     }
   }
 
@@ -2071,56 +2260,48 @@ _logEnt('after fetchEntitlements');
           onUsed?.call();
         }
 
-        final bool showRedBg = (type == 0 && isPressed);
+        final bool showBlueBg = (type == 0 && isPressed);
 
         return GestureDetector(
           onTap: _handleTap,
           child: Stack(
             alignment: Alignment.center,
             children: [
-              if (enabled)
-                AnimatedOpacity(
-                  opacity: isPressed ? 0.6 : 0.0,
-                  duration: const Duration(milliseconds: 300),
-                  child: AnimatedScale(
-                    scale: isPressed ? 2.0 : 0.0,
-                    duration: const Duration(milliseconds: 300),
-                    child: Container(
-                      width: size, height: size,
-                      decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-                    ),
-                  ),
-                ),
               AnimatedContainer(
                 duration: const Duration(milliseconds: 100),
                 width: size,
                 height: size,
                 decoration: BoxDecoration(
-                  color: showRedBg ? const Color(0xFFFF3B30) : Colors.transparent,
+                  gradient: showBlueBg
+                      ? const LinearGradient(
+                          begin: Alignment.bottomLeft,
+                          end: Alignment.topRight,
+                          colors: [
+                            Color.fromARGB(255, 156, 215, 255), // ライトブルー
+                            Color.fromARGB(255, 0, 123, 255), // ミディアムブルー
+                            Color.fromARGB(255, 0, 42, 255), // ダークブルー
+                          ],
+                        )
+                      : null,
+                  color: showBlueBg ? null : Colors.transparent,
                   shape: BoxShape.circle,
                   border: Border.all(color: borderColor, width: 3),
                 ),
                 child: Center(
-                  child: Icon(
-                    icon,
-                    color: showRedBg ? Colors.white : baseIconColor,
-                    size: size * 0.5,
-                  ),
+                  child: type == 0
+                      ? Image.asset(
+                          'assets/LikeIcon.PNG',
+                          width: size * 0.8,
+                          height: size * 0.8,
+                          color: showBlueBg ? Colors.white : baseIconColor,
+                        )
+                      : Icon(
+                          icon,
+                          color: showBlueBg ? Colors.white : baseIconColor,
+                          size: size * 0.6,
+                        ),
                 ),
               ),
-              if (!enabled)
-                Positioned(
-                  right: 0, bottom: 0,
-                  child: Container(
-                    width: size * 0.38, height: size * 0.38,
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.65),
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white24),
-                    ),
-                    child: const Icon(Icons.lock_rounded, color: Colors.white70, size: 16),
-                  ),
-                ),
             ],
           ),
         );
@@ -2167,25 +2348,28 @@ _logEnt('after fetchEntitlements');
                 disabledReason: 'ごちそうライクの残数がありません。',
               ),
               Positioned(
-                right: -36, bottom: -5,
+                right: -70, bottom: -10,
                 child: Opacity(
                   opacity: _canTreatLike ? 1.0 : 0.4,
                   child: SizedBox(
-                    width: 50, height: 30,
-                    child: CustomPaint(
-                      painter: MaskedBadgePainter(
-                        overlapCenter: const Offset(-10, 0),
-                        overlapRadius: 23,
-                      ),
+                    width: 70, height: 40,
+                    child: LeftArrowBubble(
+                      // ご馳走Likeボタンを指す位置にレイアウト（必要に応じてPositionedなどで配置）
+                      arrowDy: 5, // 縦中央から出す。数値で上下微調整可
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                         alignment: Alignment.center,
                         child: RichText(
                           textAlign: TextAlign.center,
                           text: const TextSpan(
                             children: [
-                              TextSpan(text: 'マッチ率\n', style: TextStyle(color: Colors.black, fontSize: 6, fontWeight: FontWeight.bold)),
-                              TextSpan(text: '×1.5',    style: TextStyle(color: Colors.black, fontSize: 14, fontWeight: FontWeight.bold)),
+                              TextSpan(
+                                text: 'マッチ率\n',
+                                style: TextStyle(color: Colors.black, fontSize: 10, fontWeight: FontWeight.bold),
+                              ),
+                              TextSpan(
+                                text: '×1.5',
+                                style: TextStyle(color: Colors.black, fontSize: 14, fontWeight: FontWeight.bold),
+                              ),
                             ],
                           ),
                         ),
@@ -2363,38 +2547,27 @@ _logEnt('after fetchEntitlements');
         borderRadius: BorderRadius.all(Radius.circular(16)),
       ),
       child: Row(
+        mainAxisAlignment: MainAxisAlignment.center, // ← 全体を中央寄せ
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Icon(icon, size: 10, color: Colors.black),
-          const SizedBox(width: 2),
-          Expanded(
+          const SizedBox(width: 4),
+          Flexible( // ← ExpandedではなくFlexible(loosely)に
             child: Text(
               label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center, // ← テキストも中央寄せ
               style: const TextStyle(
-                color: Colors.black, fontWeight: FontWeight.w600, fontSize: 10,
+                color: Colors.black,
+                fontWeight: FontWeight.w600,
+                fontSize: 8,
               ),
             ),
           ),
         ],
       ),
     );
-  }
-
-  double _widerItemWidth(BoxConstraints constraints,
-      {required int columns, double spacing = 8.0, double wantFactor = 1.15, double minSpacing = 2.0}) {
-    final baseWidth = (constraints.maxWidth - spacing * (columns - 1)) / columns;
-    double itemWidth = baseWidth * wantFactor;
-
-    // 収まりチェック
-    double total = itemWidth * columns + spacing * (columns - 1);
-    if (total > constraints.maxWidth) {
-      // spacing を詰めてリトライ
-      spacing = minSpacing;
-      final maxWidthPerItem = (constraints.maxWidth - spacing * (columns - 1)) / columns;
-      if (itemWidth > maxWidthPerItem) itemWidth = maxWidthPerItem;
-    }
-    return itemWidth;
   }
 
   // ── 左カラム：「基本情報」見出し＋2行3列グリッド
@@ -2600,7 +2773,7 @@ _logEnt('after fetchEntitlements');
                     if (isAllDays)
                       _grayTag('ALL', icon: Icons.access_time) // ← 横書き
                     else if (dayLabels.isEmpty)
-                      _grayTag('空きなし', icon: Icons.access_time)
+                      _grayTag('ALL', icon: Icons.access_time)
                     else
                       SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
@@ -2919,293 +3092,350 @@ _logEnt('after fetchEntitlements');
     // debugPrint('[ent][$label] $body');
   }
 
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
       body: isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? Center(
+              child: Image.asset(
+                'assets/loading_logo.gif',
+                width: 80,
+                height: 80,
+              ),
+            )
           : _showEmptyState
-            ? _buildEmptyState()
-            : NotificationListener<ScrollUpdateNotification>(
-                onNotification: (notification) {
-                  if (_isLikeEffectActive) return true;
+              ? _buildEmptyState()
+              : NotificationListener<ScrollUpdateNotification>(
+                  onNotification: (notification) {
+                    if (_isLikeEffectActive) return true;
 
-                  if (notification.dragDetails != null &&
-                      notification.metrics.axis == Axis.vertical &&
-                      notification.scrollDelta! < 0 &&
-                      _pageController.page != null &&
-                      _pageController.page!.round() > 0) {
-                    _pageController.jumpToPage(_pageController.page!.round());
-                    return true;
-                  }
-                  return false;
-                },
-                child: Stack(
-                  children: [
-                    IgnorePointer(
-                      ignoring: _isLikeEffectActive,
-                      child: PageView.builder(
-                        controller: _pageController,
-                        scrollDirection: Axis.vertical,
-                        physics: _isLikeEffectActive
-                            ? const NeverScrollableScrollPhysics()
-                            : const BouncingScrollPhysics(),
-                        itemCount: profiles.length,
-                        onPageChanged: (index) {
-                          if (_isLikeEffectActive) return; // 演出中の副作用停止
-                          setState(() => currentPageIndex = index);
+                    if (notification.dragDetails != null &&
+                        notification.metrics.axis == Axis.vertical &&
+                        notification.scrollDelta! < 0 &&
+                        _pageController.page != null &&
+                        _pageController.page!.round() > 0) {
+                      _pageController.jumpToPage(_pageController.page!.round());
+                      return true;
+                    }
+                    return false;
+                  },
+                  // ▼▼▼ メイン画面を AnimatedSwitcher + GestureDetector で包む ▼▼▼
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 280),
+                    transitionBuilder: (child, anim) {
+                      // _modeSlideSign: 1=右→左に入る, -1=左→右に入る
+                      final tween = Tween<Offset>(
+                        begin: Offset(_modeSlideSign.toDouble(), 0.0),
+                        end: Offset.zero,
+                      ).chain(CurveTween(curve: Curves.easeOutCubic));
+                      return ClipRect(
+                        child: SlideTransition(position: anim.drive(tween), child: child),
+                      );
+                    },
+                    // isMatchMultiple の変化で child を入れ替えてスライド
+                    child: KeyedSubtree(
+                      key: ValueKey(isMatchMultiple),
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onHorizontalDragEnd: (details) {
+                          const threshold = 150;                // 速度しきい値（調整可）
+                          final v = details.primaryVelocity ?? 0.0;
 
-                          final viewedUserId = profiles[index]['user_id'];
-                          _checkIncomingPaidLikeFor(viewedUserId);
+                          // v > 0  … 左→右（右へフリック）
+                          // v < 0  … 右→左（左へフリック）
+                          if (isMatchMultiple == true) {
+                            // みんなでマッチ中
+                            if (v > threshold) {
+                              // 左→右：エリア選択画面へ
+                              Navigator.push(
+                                context,
+                                _slideRoute(
+                                  AreaSelectionScreen(userId: widget.currentUserId),
+                                  direction: AxisDirection.right, // 画面が左から入ってくる演出
+                                ),
+                              );
+                            } else if (v < -threshold) {
+                              // 右→左：ひとりでマッチへ
+                              if (isMatchMultiple != false) {
+                                setState(() => _modeSlideSign = 1); // 右→左に入る
+                                _updateMatchMultiple(widget.currentUserId, false);
+                              }
+                            }
+                          } else if (isMatchMultiple == false) {
+                            // ひとりでマッチ中
+                            if (v > threshold) {
+                              // 左→右：みんなでマッチへ
+                              if (isMatchMultiple != true) {
+                                setState(() => _modeSlideSign = -1); // 左→右に入る
+                                _updateMatchMultiple(widget.currentUserId, true);
+                              }
+                            }
+                            // 右→左時（v > threshold）は何もしない（要件外）
+                          } else {
+                            // まだ未確定(null)なら無視
+                          }
                         },
-                        itemBuilder: (context, index) {
-                          final profile = profiles[index];
-                          // 0=1枚目, 1=2枚目, 2+=3枚目以降
-                          final imgIdx = imageIndexes[profile['user_id']] ?? 0;
+                        // ここから先は従来の Stack 構成そのまま
+                        child: Stack(
+                          children: [
+                            IgnorePointer(
+                              ignoring: _isLikeEffectActive,
+                              child: PageView.builder(
+                                controller: _pageController,
+                                scrollDirection: Axis.vertical,
+                                physics: _isLikeEffectActive
+                                    ? const NeverScrollableScrollPhysics()
+                                    : const BouncingScrollPhysics(),
+                                itemCount: profiles.length,
+                                onPageChanged: (index) {
+                                  if (_isLikeEffectActive) return; // 演出中の副作用停止
+                                  setState(() => currentPageIndex = index);
 
-                          return Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              GestureDetector(
-                                onDoubleTap: () async {
-                                  if (_isLikeEffectActive) return;
-
-                                  // ★null安全なガード
-                                  if (_isOutOfNormalLikes) {
-                                    goPaywall(context, userId: widget.currentUserId);
-                                    return;
-                                  }
-
-                                  await _sendLike(profile['user_id'], 0);
-
-                                  // 楽観減算（無制限は減らさない）
-                                  if (!_likeUnlimited && (_normalLikesLeft ?? 0) > 0) {
-                                    setState(() => _normalLikesLeft = (_normalLikesLeft ?? 0) - 1);
-                                  }
-
-                                  final pg = _pageController.hasClients ? _pageController.page : null;
-                                  if (pg != null && pg.round() < profiles.length - 1) {
-                                    _pageController.nextPage(
-                                      duration: const Duration(milliseconds: 500),
-                                      curve: Curves.easeInOut,
-                                    );
-                                  }
-
-                                  await _fetchEntitlements(widget.currentUserId);
+                                  final viewedUserId = profiles[index]['user_id'];
+                                  _checkIncomingPaidLikeFor(viewedUserId);
                                 },
-                                child: _buildProfileImage(profile['user_id']),
-                              ),
+                                itemBuilder: (context, index) {
+                                  final profile = profiles[index];
+                                  // 0=1枚目, 1=2枚目, 2+=3枚目以降
+                                  final imgIdx = imageIndexes[profile['user_id']] ?? 0;
 
-                              SafeArea(
-                                child: Column(
-                                  children: [
-                                    _buildTopNavigationBar(
-                                      context,
-                                      widget.currentUserId,
-                                      isMatchMultiple ?? true,
-                                      (bool newValue) => _updateMatchMultiple(widget.currentUserId, newValue),
-                                      profile['gender'],
-                                    ),
+                                  return Stack(
+                                    fit: StackFit.expand,
+                                    children: [
+                                      GestureDetector(
+                                        onDoubleTap: () async {
+                                          if (_isLikeEffectActive) return;
 
-                                    // カレンダー
-                                    _buildCalendar(),
+                                          // ★null安全なガード
+                                          if (_isOutOfNormalLikes) {
+                                            goPaywall(context, userId: widget.currentUserId);
+                                            return;
+                                          }
 
-                                    // ★ カレンダー直下のバナー（GlobalKey不要）
-                                    AnimatedSwitcher(
-                                      duration: const Duration(milliseconds: 250),
-                                      switchInCurve: Curves.easeOut,
-                                      switchOutCurve: Curves.easeIn,
-                                      child: (_activeLikeEffect == null)
-                                          ? const SizedBox.shrink()
-                                          : Padding(
-                                              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-                                              child: _LikeFlowBanner(
-                                                // ★ 3秒で中央→右へ流れる
-                                                duration: const Duration(milliseconds: 3000),
-                                                child: _BannerImage(
-                                                  assetPath: kLikeBannerAsset[_activeLikeEffect]!,
+                                          await _sendLike(profile['user_id'], 0);
+
+                                          // 楽観減算（無制限は減らさない）
+                                          if (!_likeUnlimited && (_normalLikesLeft ?? 0) > 0) {
+                                            setState(() => _normalLikesLeft = (_normalLikesLeft ?? 0) - 1);
+                                          }
+
+                                          final pg = _pageController.hasClients ? _pageController.page : null;
+                                          if (pg != null && pg.round() < profiles.length - 1) {
+                                            _pageController.nextPage(
+                                              duration: const Duration(milliseconds: 500),
+                                              curve: Curves.easeInOut,
+                                            );
+                                          }
+
+                                          await _fetchEntitlements(widget.currentUserId);
+                                        },
+                                        child: _buildProfileImage(profile['user_id']),
+                                      ),
+
+                                      SafeArea(
+                                        child: Column(
+                                          children: [
+                                            _buildTopNavigationBar(
+                                              context,
+                                              widget.currentUserId,
+                                              isMatchMultiple, // ← 下線は isMatchMultiple に依存（nullのときは下線なし）
+                                              (bool newValue) {
+                                                // トップナビからの切替でも左右スライド方向を付ける
+                                                if (isMatchMultiple == newValue) return;
+                                                setState(() {
+                                                  _modeSlideSign = newValue ? -1 : 1;
+                                                });
+                                                _updateMatchMultiple(widget.currentUserId, newValue);
+                                              },
+                                              profile['gender'],
+                                            ),
+
+                                            // カレンダー
+                                            _buildCalendar(),
+
+                                            // ★ カレンダー直下のバナー（GlobalKey不要）
+                                            AnimatedSwitcher(
+                                              duration: const Duration(milliseconds: 250),
+                                              switchInCurve: Curves.easeOut,
+                                              switchOutCurve: Curves.easeIn,
+                                              child: (_activeLikeEffect == null)
+                                                  ? const SizedBox.shrink()
+                                                  : Padding(
+                                                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                                                      child: _LikeFlowBanner(
+                                                        // ★ 3秒で中央→右へ流れる
+                                                        duration: const Duration(milliseconds: 3000),
+                                                        child: _BannerImage(
+                                                          assetPath: kLikeBannerAsset[_activeLikeEffect]!,
+                                                        ),
+                                                      ),
+                                                    ),
+                                            ),
+
+                                            const Spacer(),
+                                          ],
+                                        ),
+                                      ),
+
+                                      if (_activeLikeEffect != null)
+                                        _BottomTintPanel(
+                                          color: kLikeTintColor[_activeLikeEffect]!,
+                                          height: 200, // 好みで 160〜240 など
+                                        ),
+
+                                      _likeButtons(profile['user_id']),
+
+                                      // 戻るボタン（Settee Vip 有効時のみ有効）
+                                      Positioned(
+                                        bottom: 180,
+                                        left: 30,
+                                        child: GestureDetector(
+                                          onTap: () {
+                                            if (!_backtrackEnabled) {
+                                              Navigator.of(context).push(
+                                                MaterialPageRoute(
+                                                  builder: (_) => PaywallScreen(userId: widget.currentUserId),
+                                                ),
+                                              );
+                                              return;
+                                            }
+                                            if (_pageController.page != null &&
+                                                _pageController.page!.round() > 0) {
+                                              _pageController.previousPage(
+                                                duration: const Duration(milliseconds: 500),
+                                                curve: Curves.easeInOut,
+                                              );
+                                            }
+                                          },
+                                          child: Stack(
+                                            clipBehavior: Clip.none,
+                                            children: [
+                                              Opacity(
+                                                opacity: _backtrackEnabled ? 1.0 : 0.6,
+                                                child: Container(
+                                                  width: 35,
+                                                  height: 35,
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.transparent,
+                                                    shape: BoxShape.circle,
+                                                    border: Border.all(
+                                                      color: _backtrackEnabled ? Colors.white : Colors.white24,
+                                                      width: 3,
+                                                    ),
+                                                  ),
+                                                  child: Center(
+                                                    child: Icon(
+                                                      Icons.keyboard_arrow_up_outlined,
+                                                      color: _backtrackEnabled ? Colors.white : Colors.white38,
+                                                      size: 30,
+                                                    ),
+                                                  ),
                                                 ),
                                               ),
-                                            ),
-                                    ),
-
-
-                                    const Spacer(),
-                                  ],
-                                ),
-                              ),
-
-                              if (_activeLikeEffect != null)
-                                _BottomTintPanel(
-                                  color: kLikeTintColor[_activeLikeEffect]!,
-                                  height: 200, // 好みで 160〜240 など
-                                ),
-
-
-                              _likeButtons(profile['user_id']),
-
-                              // 戻るボタン（Settee Vip 有効時のみ有効）
-                              Positioned(
-                                bottom: 180,
-                                left: 30,
-                                child: GestureDetector(
-                                  onTap: () {
-                                    if (!_backtrackEnabled) {
-                                      Navigator.of(context).push(
-                                        MaterialPageRoute(
-                                          builder: (_) => PaywallScreen(userId: widget.currentUserId),
-                                        ),
-                                      );
-                                      return;
-                                    }
-                                    if (_pageController.page != null &&
-                                        _pageController.page!.round() > 0) {
-                                      _pageController.previousPage(
-                                        duration: const Duration(milliseconds: 500),
-                                        curve: Curves.easeInOut,
-                                      );
-                                    }
-                                  },
-                                  child: Stack(
-                                    clipBehavior: Clip.none,
-                                    children: [
-                                      Opacity(
-                                        opacity: _backtrackEnabled ? 1.0 : 0.6,
-                                        child: Container(
-                                          width: 35,
-                                          height: 35,
-                                          decoration: BoxDecoration(
-                                            color: Colors.transparent,
-                                            shape: BoxShape.circle,
-                                            border: Border.all(
-                                              color: _backtrackEnabled ? Colors.white : Colors.white24,
-                                              width: 3,
-                                            ),
-                                          ),
-                                          child: Center(
-                                            child: Icon(
-                                              Icons.keyboard_arrow_up_outlined,
-                                              color: _backtrackEnabled ? Colors.white : Colors.white38,
-                                              size: 30,
-                                            ),
+                                            ],
                                           ),
                                         ),
                                       ),
-                                      if (!_backtrackEnabled)
-                                        Positioned(
-                                          right: -6,
-                                          top: -6,
-                                          child: Container(
-                                            width: 16,
-                                            height: 16,
-                                            decoration: BoxDecoration(
-                                              color: Colors.black.withOpacity(0.65),
-                                              shape: BoxShape.circle,
-                                              border: Border.all(color: Colors.white24),
-                                            ),
-                                            child: const Icon(Icons.lock_rounded, color: Colors.white70, size: 10),
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                              // ★ 65%（白） : 35%（灰）で横幅を割り当てる共通オーバーレイ
-                              Positioned(
-                                bottom: 15,
-                                left: 5,
-                                right: 5,
-                                child: LayoutBuilder(
-                                  builder: (context, constraints) {
-                                    final totalW  = constraints.maxWidth;
-                                    final leftW   = totalW * 0.65; // 白タグ領域
-                                    final rightW  = totalW * 0.33; // 灰タグ領域
 
-                                    return Row(
-                                      crossAxisAlignment: CrossAxisAlignment.end, // 右側パネルの高さに合わせて下揃え
-                                      children: [
-                                        // 左：白タグ領域（名前＋基本情報/求めているのは）
-                                        SizedBox(
-                                          width: leftW,
-                                          child: (imgIdx <= 1)
-                                              ? Column(
-                                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                                  children: [
-                                                    Row(
-                                                      crossAxisAlignment: CrossAxisAlignment.center,
-                                                      children: [
-                                                        Expanded(
-                                                          child: Text(
-                                                            '${profile['nickname']}  ${profile['age']}',
-                                                            style: GoogleFonts.notoSansJp(
-                                                              textStyle: const TextStyle(
-                                                                color: Colors.white,
-                                                                fontSize: 25,
-                                                                fontWeight: FontWeight.bold,
-                                                              ),
+                                      // ★ 65%（白） : 35%（灰）で横幅を割り当てる共通オーバーレイ
+                                      Positioned(
+                                        bottom: 15,
+                                        left: 15,
+                                        right: 15,
+                                        child: LayoutBuilder(
+                                          builder: (context, constraints) {
+                                            final totalW  = constraints.maxWidth;
+                                            final leftW   = totalW * 0.65; // 白タグ領域
+                                            final rightW  = totalW * 0.33; // 灰タグ領域
+
+                                            return Row(
+                                              crossAxisAlignment: CrossAxisAlignment.end, // 右側パネルの高さに合わせて下揃え
+                                              children: [
+                                                // 左：白タグ領域（名前＋基本情報/求めているのは）
+                                                SizedBox(
+                                                  width: leftW,
+                                                  child: (imgIdx <= 1)
+                                                      ? Column(
+                                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                                          children: [
+                                                            Row(
+                                                              crossAxisAlignment: CrossAxisAlignment.center,
+                                                              children: [
+                                                                Flexible(
+                                                                  child: Text(
+                                                                    '${profile['nickname']}  ${profile['age']}',
+                                                                    style: GoogleFonts.notoSansJp(
+                                                                      textStyle: const TextStyle(
+                                                                        color: Colors.white,
+                                                                        fontSize: 25,
+                                                                        fontWeight: FontWeight.bold,
+                                                                      ),
+                                                                    ),
+                                                                    overflow: TextOverflow.ellipsis,
+                                                                  ),
+                                                                ),
+                                                                const SizedBox(width: 20),
+                                                                _UserActionsMenuButton(
+                                                                  onTap: () {
+                                                                    // 既存のボトムシートをそのまま呼ぶ
+                                                                    _showUserActions(context, {
+                                                                      'user_id': profile['user_id'],
+                                                                      'nickname': profile['nickname'],
+                                                                    });
+                                                                  },
+                                                                ),
+                                                              ],
                                                             ),
-                                                            overflow: TextOverflow.ellipsis,
-                                                          ),
-                                                        ),
-                                                        const SizedBox(width: 6),
-                                                        _UserActionsMenuButton(
-                                                          onTap: () {
-                                                            // 既存のボトムシートをそのまま呼ぶ
-                                                            _showUserActions(context, {
-                                                              'user_id': profile['user_id'],
-                                                              'nickname': profile['nickname'],
-                                                            });
-                                                          },
-                                                        ),
-                                                      ],
-                                                    ),
 
-                                                    const SizedBox(height: 6),
+                                                            const SizedBox(height: 6),
 
-                                                    // 1枚目＝基本情報、2枚目＝求めているのは（いずれも未設定は非表示＋高さ予約済）
-                                                    if (imgIdx == 0)
-                                                      _leftBasicInfoBlock(profile)
-                                                    else
-                                                      _leftSeekingPreferenceBlock(profile),
-                                                  ],
-                                                )
-                                              : const SizedBox.shrink(), // 3枚目以降は非表示（横幅は確保したままでもOKにしたい場合はここで高さ確保用のBoxに変更可）
+                                                            // 1枚目＝基本情報、2枚目＝求めているのは
+                                                            if (imgIdx == 0)
+                                                              _leftBasicInfoBlock(profile)
+                                                            else
+                                                              _leftSeekingPreferenceBlock(profile),
+                                                          ],
+                                                        )
+                                                      : const SizedBox.shrink(),
+                                                ),
+                                                SizedBox(width: totalW * 0.02),
+                                                // 右：灰タグ領域（エリア＋曜日）
+                                                SizedBox(
+                                                  width: rightW,
+                                                  child: Align(
+                                                    alignment: Alignment.bottomRight,
+                                                    child: _rightAreaAndDaysBlock(profile),
+                                                  ),
+                                                ),
+                                              ],
+                                            );
+                                          },
                                         ),
-                                        SizedBox(width: totalW * 0.02),
-                                        // 右：灰タグ領域（エリア＋曜日）
-                                        SizedBox(
-                                          width: rightW,
-                                          child: Align(
-                                            alignment: Alignment.bottomRight,
-                                            child: _rightAreaAndDaysBlock(profile), // ← 既存の右パネル（高さは内部の _rightPanelReservedHeight に準拠）
-                                          ),
-                                        ),
-                                      ],
-                                    );
-                                  },
-                                ),
+                                      ),
+                                    ],
+                                  );
+                                },
                               ),
-                            ],
-                          );
-                        },
+                            ),
+                            // 左端の進捗バー
+                            Positioned(
+                              top: 0,
+                              bottom: 0,
+                              left: 10,
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: _buildVerticalProgressBar(
+                                    currentPageIndex, profiles.length),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                    // 左端の進捗バー
-                    Positioned(
-                      top: 0,
-                      bottom: 0,
-                      left: 10,
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: _buildVerticalProgressBar(
-                            currentPageIndex, profiles.length),
-                      ),
-                    ),
-                  ],
+                  ),
+                  // ▲▲▲ ここまで AnimatedSwitcher + GestureDetector ▲▲▲
                 ),
-              ),
       bottomNavigationBar: _buildBottomNavigationBar(context, widget.currentUserId),
     );
   }
@@ -4750,6 +4980,30 @@ class _InlineCameraPageState extends State<_InlineCameraPage> {
     super.dispose();
   }
 
+  Widget _buildCameraPreview() {
+    if (!_ready || !_ctrl.value.isInitialized) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final aspect = _ctrl.value.aspectRatio;
+        final previewSize = _ctrl.value.previewSize;
+        // Fallback to the current box width when previewSize is unavailable.
+        final baseWidth  = previewSize?.width  ?? constraints.maxWidth;
+        final baseHeight = previewSize?.height ?? (baseWidth / aspect);
+
+        return Center(
+          child: SizedBox(
+            width: baseWidth,
+            height: baseHeight,
+            child: CameraPreview(_ctrl),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -4757,8 +5011,7 @@ class _InlineCameraPageState extends State<_InlineCameraPage> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: _ready ? CameraPreview(_ctrl)
-                          : const Center(child: CircularProgressIndicator()),
+            child: _buildCameraPreview(),
           ),
           // 緑フレーム等はそのまま…
           Positioned(
@@ -4886,14 +5139,14 @@ class _UserActionsMenuButton extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(24),
         child: Container(
-          width: 40, height: 40, // 最低タップ領域（48でもOK）
+          width: 30, height: 30, // 最低タップ領域（48でもOK）
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: Colors.black.withOpacity(0.35),
-            shape: BoxShape.circle,
+            borderRadius: BorderRadius.circular(4),
             border: Border.all(color: Colors.white24),
           ),
-          child: const Icon(Icons.more_vert, color: Colors.white, size: 22),
+          child: const Icon(Icons.more_vert, color: Colors.white, size: 25),
         ),
       ),
     );
@@ -5067,4 +5320,121 @@ class _MessageLikeOverlayCardState extends State<_MessageLikeOverlayCard> {
       ),
     );
   }
+}
+
+// 吹き出し（左辺から矢印）
+class LeftArrowBubble extends StatelessWidget {
+  const LeftArrowBubble({
+    super.key,
+    required this.child,
+    this.color = Colors.white,
+    this.borderColor = const Color(0x33000000),
+    this.borderRadius = 8,
+    this.arrowWidth = 8,
+    this.arrowHeight = 10,
+    this.padding = const EdgeInsets.all(6),
+    this.arrowDy, // null なら縦中央
+    this.elevation = 2,
+  });
+
+  final Widget child;
+  final Color color;
+  final Color borderColor;
+  final double borderRadius;
+  final double arrowWidth;
+  final double arrowHeight;
+  final EdgeInsets padding;
+  final double? arrowDy;
+  final double elevation;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _LeftArrowBubblePainter(
+        color: color,
+        borderColor: borderColor,
+        borderRadius: borderRadius,
+        arrowWidth: arrowWidth,
+        arrowHeight: arrowHeight,
+        arrowDy: arrowDy,
+        elevation: elevation,
+      ),
+      child: Padding(
+        // 左側に矢印ぶんの余白を足す
+        padding: padding.add(EdgeInsets.only(left: arrowWidth)),
+        child: child,
+      ),
+    );
+  }
+}
+
+class _LeftArrowBubblePainter extends CustomPainter {
+  _LeftArrowBubblePainter({
+    required this.color,
+    required this.borderColor,
+    required this.borderRadius,
+    required this.arrowWidth,
+    required this.arrowHeight,
+    required this.arrowDy,
+    required this.elevation,
+  });
+
+  final Color color;
+  final Color borderColor;
+  final double borderRadius;
+  final double arrowWidth;
+  final double arrowHeight;
+  final double? arrowDy;
+  final double elevation;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rrect = RRect.fromLTRBR(
+      arrowWidth, // 左は矢印ぶんオフセット
+      0,
+      size.width,
+      size.height,
+      Radius.circular(borderRadius),
+    );
+
+    // 影（軽め）
+    if (elevation > 0) {
+      final shadowPaint = Paint()
+        ..color = Colors.black.withOpacity(0.15)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, elevation);
+      canvas.drawRRect(rrect, shadowPaint);
+    }
+
+    // 本体
+    final paintFill = Paint()..color = color;
+    canvas.drawRRect(rrect, paintFill);
+
+    // 矢印（三角形）
+    final dy = arrowDy ?? (size.height - arrowHeight) / 2;
+    final path = Path()
+      ..moveTo(0, dy + arrowHeight / 2)               // 左辺の中点
+      ..lineTo(arrowWidth, dy)                         // 上
+      ..lineTo(arrowWidth, dy + arrowHeight)           // 下
+      ..close();
+    canvas.drawPath(path, paintFill);
+
+    // 枠線（任意）
+    final stroke = Paint()
+      ..color = borderColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+
+    canvas.drawRRect(rrect, stroke);
+    canvas.drawPath(path, stroke);
+  }
+
+  @override
+  bool shouldRepaint(covariant _LeftArrowBubblePainter old) =>
+      old.color != color ||
+      old.borderColor != borderColor ||
+      old.borderRadius != borderRadius ||
+      old.arrowWidth != arrowWidth ||
+      old.arrowHeight != arrowHeight ||
+      old.arrowDy != arrowDy ||
+      old.elevation != elevation;
 }

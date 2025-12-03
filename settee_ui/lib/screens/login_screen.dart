@@ -16,6 +16,110 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _pwController = TextEditingController();
   bool _isLoading = false;
 
+  Future<void> _showLoginBonusDialog(Map<String, dynamic> bonus) async {
+    if (!mounted) return;
+
+    final consecutiveDays = bonus['consecutive_days'] as int? ?? 0;
+    final dailyBonus = bonus['daily_bonus'] as int? ?? 0;
+    final streakBonus = bonus['streak_bonus'] as int? ?? 0;
+    final currentPoints = bonus['current_points'] as int? ?? 0;
+    final messages = (bonus['messages'] as List<dynamic>?)?.cast<String>() ?? [];
+
+    return showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: const [
+            Icon(Icons.card_giftcard, color: Colors.orange, size: 28),
+            SizedBox(width: 8),
+            Text('ログインボーナス', style: TextStyle(color: Colors.white)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (dailyBonus > 0)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'デイリーボーナス: +${dailyBonus}pt',
+                  style: const TextStyle(fontSize: 16, color: Colors.white),
+                ),
+              ),
+            if (streakBonus > 0)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  '🎉 7日連続ログインボーナス: +${streakBonus}pt',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.orange,
+                  ),
+                ),
+              ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Icon(Icons.local_fire_department, color: Colors.orange, size: 20),
+                const SizedBox(width: 4),
+                Text(
+                  '連続ログイン: ${consecutiveDays}日目',
+                  style: const TextStyle(color: Colors.white70, fontSize: 14),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    '現在のポイント',
+                    style: TextStyle(color: Colors.white, fontSize: 14),
+                  ),
+                  Text(
+                    '${currentPoints}pt',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.greenAccent,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (messages.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              ...messages.map((msg) => Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      '• $msg',
+                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                  )),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK', style: TextStyle(color: Colors.greenAccent, fontSize: 16)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _login() async {
     final loginInput = _loginController.text.trim();
     final passwordInput = _pwController.text.trim();
@@ -48,6 +152,7 @@ class _LoginScreenState extends State<LoginScreen> {
         final data = jsonDecode(bodyString) as Map<String, dynamic>;
 
         final userId = data['user_id'] as String;
+        final loginBonus = data['login_bonus'] as Map<String, dynamic>?;
 
         // 2) 端末に通常の user_id を保存
         final prefs = await SharedPreferences.getInstance();
@@ -57,6 +162,11 @@ class _LoginScreenState extends State<LoginScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(data['message']?.toString() ?? 'ログインに成功しました')),
         );
+
+        // ログインボーナスダイアログを表示
+        if (loginBonus != null && (loginBonus['total_granted'] as int? ?? 0) > 0) {
+          await _showLoginBonusDialog(loginBonus);
+        }
 
         // 3) 管理者なら、ログイン直後に“サイレント昇格”（短命トークン取得）
         String? adminToken;
@@ -76,8 +186,8 @@ class _LoginScreenState extends State<LoginScreen> {
               final ttlSec = (m['expires_in'] as num?)?.toInt() ?? 900;
               adminExpMs = DateTime.now().millisecondsSinceEpoch + ttlSec * 1000;
 
-              if (adminToken != null && adminToken!.isNotEmpty) {
-                await prefs.setString('admin_access', adminToken!);
+              if (adminToken != null && adminToken.isNotEmpty) {
+                await prefs.setString('admin_access', adminToken);
                 await prefs.setInt('admin_exp', adminExpMs);
               }
             } else {

@@ -164,12 +164,16 @@ class _StationSelectScreenState extends State<StationSelectScreen> {
                 ),
               ),
 
-              // チェックマーク
+              // チェックマーク（右端・垂直中央）
               if (isSelected)
-                Positioned(
-                  right: 12,
-                  top: 12,
-                  child: Icon(Icons.check_circle, color: Colors.white, size: checkSize),
+                Positioned.fill(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: Icon(Icons.check_circle, color: Colors.white, size: checkSize),
+                    ),
+                  ),
                 ),
 
               // タップ反応（Ink効果）
@@ -251,7 +255,7 @@ class _StationSelectScreenState extends State<StationSelectScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 8),
                     child: Text(
                       'あなたがマッチしたいエリアを選ぼう。\n新たな出会いを',
-                      style: TextStyle(color: Colors.black, fontSize: headlineSize),
+                      style: TextStyle(color: Colors.black, fontSize: headlineSize, fontWeight: FontWeight.bold),
                       textAlign: TextAlign.center,
                     ),
                   ),

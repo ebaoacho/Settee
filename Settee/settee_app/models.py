@@ -220,7 +220,42 @@ class UserProfile(models.Model):
     bonus_treat_like_credits   = models.PositiveIntegerField(default=0)
 
     refine_unlocked = models.BooleanField(default=False)
-    
+
+    # === ログインボーナス関連 ===
+    last_login_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="最後にログインした日付（JST）"
+    )
+
+    consecutive_login_days = models.IntegerField(
+        default=0,
+        help_text="連続ログイン日数（0〜7+）"
+    )
+
+    monthly_streak_bonus_count = models.IntegerField(
+        default=0,
+        help_text="今月獲得した連続ログインボーナスの回数"
+    )
+
+    last_streak_bonus_reset = models.DateField(
+        null=True,
+        blank=True,
+        help_text="最後に月間カウントをリセットした日（月初リセット用）"
+    )
+
+    # === マッチングボーナス関連 ===
+    monthly_match_bonus_count = models.IntegerField(
+        default=0,
+        help_text="今月獲得したマッチングボーナスの回数"
+    )
+
+    last_match_bonus_reset = models.DateField(
+        null=True,
+        blank=True,
+        help_text="最後にマッチングボーナスカウントをリセットした日"
+    )
+
     # === プラン別の定数 ===
     NORMAL_LIKES_PER_WINDOW = 35
     NORMAL_LIKE_WINDOW_HOURS = 12
@@ -228,7 +263,7 @@ class UserProfile(models.Model):
     VIP_BASE_SUPER_PER_MONTH   = 10
     VIP_BASE_TREAT_PER_MONTH   = 10
     VIP_BASE_MESSAGE_PER_MONTH = 10
-    
+
     is_banned = models.BooleanField(default=False)
 
     def clean_available_dates(self):

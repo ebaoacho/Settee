@@ -763,7 +763,13 @@ class _MatchedUsersScreenState extends State<MatchedUsersScreen> {
           ),
           Expanded(
             child: _loading
-                ? const Center(child: CircularProgressIndicator(color: Colors.white))
+                ? Center(
+                    child: Image.asset(
+                      'assets/loading_logo.gif',
+                      width: 80,
+                      height: 80,
+                    ),
+                  )
                 : ListView.separated(
                     itemCount: _items.length,
                     separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),

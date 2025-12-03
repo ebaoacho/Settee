@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'user_profile_screen.dart';
@@ -70,7 +71,7 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
         setState(() {
           _setteePoints = points;
 
-          // “ロック解除フラグ”をプランで決定：plus/vip -> true, free -> false
+          // "ロック解除フラグ"をプランで決定：plus/vip -> true, free -> false
           _setteeLikersActive = plan != 'free';
 
           // プラン保持（必要に応じてUI出し分けで利用可能）
@@ -78,17 +79,12 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
 
           _pointsLoading = false;
 
-          // likers ローディングは plan によって決める
-          _likersLoading = plan != 'free';
+          // FREEユーザーもlikersをロードする（モザイク表示のため）
+          _likersLoading = true;
         });
 
-        // ---- plus か vip の場合のみ “あなたをLikeしているユーザー” を解放（取得）----
-        if (plan != 'free') {
-          await _fetchLikers();
-        } else {
-          if (!mounted) return;
-          setState(() => _likersLoading = false);
-        }
+        // ---- 全てのユーザーで "あなたをLikeしているユーザー" を取得 ----
+        await _fetchLikers();
       } else {
         if (!mounted) return;
         setState(() {
@@ -157,16 +153,17 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
   Widget build(BuildContext context) {
     // 性別が取得できるまでローディング
     if (gender == null) {
-      return const Scaffold(
+      return Scaffold(
         backgroundColor: Colors.black,
-        body: Center(child: CircularProgressIndicator()),
+        body: Center(
+          child: Image.asset(
+            'assets/loading_logo.gif',
+            width: 80,
+            height: 80,
+          ),
+        ),
       );
     }
-
-    // 性別によって画像を選択
-    final isFemale = gender == '女性';
-    // final yourTypeImage = isFemale ? 'assets/maybe_your_type_for_female.png' : 'assets/maybe_your_type.png';
-    final likedYouImage = isFemale ? 'assets/liked_you_for_female.png' : 'assets/liked_you.png';
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -201,9 +198,10 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
                             );
                           },
                   )
-                : _buildLockedSectionWithImage(
-                    title: 'あなたをLikeしているユーザー',
-                    imagePath: likedYouImage,
+                : _buildBlurredLikersSection(
+                    'あなたをLikeしているユーザー',
+                    _likers,
+                    loading: _likersLoading,
                   ),
 
               const SizedBox(height: 32),
@@ -254,6 +252,7 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
     );
   }
 
+  // ヘッダー（Settee Point をボタン化）
   Widget _buildHeader() {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -261,43 +260,52 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
         Image.asset('assets/white_logo_text.png', width: 90),
         Row(
           children: [
-            // 表示：Settee Point 残高
             _pointsLoading
                 ? const SizedBox(
                     width: 80,
                     height: 16,
                     child: LinearProgressIndicator(minHeight: 4),
                   )
-                : Text(
-                    'Settee Point  $_setteePoints p',
-                    style: const TextStyle(
-                      color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                : MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: InkWell(
+                      onTap: _openPointExchange,
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.white, // クリックできることが分かるようにピル風
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          'Settee Point  $_setteePoints p',
+                          style: const TextStyle(
+                            color: Colors.black,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
             const SizedBox(width: 8),
-
-            // 交換ボタン → 交換画面から戻ったら残高を再取得
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              ),
-              onPressed: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => PointExchangeScreen(userId: widget.userId),
-                  ),
-                );
-                if (!mounted) return;
-                setState(() => _pointsLoading = true);
-                _fetchEntitlementsAndPoints();
-              },
-              child: const Text('Pointを交換する', style: TextStyle(color: Colors.black)),
-            ),
           ],
         ),
       ],
     );
+  }
+
+  // 交換画面を開いて、戻ったらポイントを再取得
+  Future<void> _openPointExchange() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PointExchangeScreen(userId: widget.userId),
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _pointsLoading = true);
+    _fetchEntitlementsAndPoints();
   }
 
   Widget _buildLikersSection(
@@ -365,54 +373,226 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
     );
   }
 
-  Widget _buildLockedSectionWithImage({required String title, required String imagePath}) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => PaywallScreen(
-              userId: widget.userId,
-              campaignActive: true, // リリース後は判定ロジックに置換
-            ),
-          ),
-        );
-      },
-      child: Column(
+  Widget _buildBlurredLikersSection(
+    String title,
+    List<dynamic> users, {
+    bool loading = false,
+  }) {
+    if (loading) {
+      return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
+              Text(title,
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(width: 6),
+              const Icon(Icons.lock, color: Colors.white, size: 16),
+              const Spacer(),
+              const SizedBox(
+                width: 64,
+                height: 14,
+                child: LinearProgressIndicator(minHeight: 3),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+        ],
+      );
+    }
+
+    if (users.isEmpty) {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => PaywallScreen(
+                userId: widget.userId,
+                campaignActive: true,
+              ),
+            ),
+          );
+        },
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: const [
+                Text(
+                  'あなたをLikeしているユーザー',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+                SizedBox(width: 6),
+                Icon(Icons.lock, color: Colors.white, size: 16),
+                Spacer(),
+                Icon(Icons.arrow_forward_ios, color: Colors.white, size: 14),
+              ],
+            ),
+            const SizedBox(height: 2),
+            const Text(
+              'Settee+以上限定です',
+              style: TextStyle(color: Colors.grey, fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            // モザイクがかかったメッセージ
+            Center(
+              child: ImageFiltered(
+                imageFilter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                child: const Text(
+                  'いまは表示できる相手がいません。\n時間をおいて再度ご確認ください。',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white, fontSize: 18),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      );
+    }
+
+    // ユーザーが存在する場合、モザイク付きで表示
+    final supportedExtensions = ['jpg', 'jpeg', 'png'];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => PaywallScreen(
+                  userId: widget.userId,
+                  campaignActive: true,
+                ),
+              ),
+            );
+          },
+          child: Row(
+            children: const [
               Text(
-                title,
-                style: const TextStyle(
+                'あなたをLikeしているユーザー',
+                style: TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.bold,
                   fontSize: 16,
                 ),
               ),
-              const SizedBox(width: 6),
-              const Icon(Icons.lock, color: Colors.white, size: 16),
-              const Spacer(),
-              const Icon(Icons.arrow_forward_ios, color: Colors.white, size: 14),
+              SizedBox(width: 6),
+              Icon(Icons.lock, color: Colors.white, size: 16),
+              Spacer(),
+              Icon(Icons.arrow_forward_ios, color: Colors.white, size: 14),
             ],
           ),
-          const SizedBox(height: 2),
-          const Text(
-            'Settee+以上限定です',
-            style: TextStyle(color: Colors.grey, fontSize: 12),
-          ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: AspectRatio(
-              aspectRatio: 16 / 9,
-              child: Image.asset(imagePath, fit: BoxFit.contain),
+        ),
+        const SizedBox(height: 2),
+        const Text(
+          'Settee+以上限定です',
+          style: TextStyle(color: Colors.grey, fontSize: 12),
+        ),
+        const SizedBox(height: 16),
+
+        SizedBox(
+          height: 220,
+          child: Align(
+            alignment: Alignment.center,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              shrinkWrap: true,
+              itemCount: users.length.clamp(0, 3),
+              separatorBuilder: (_, __) => const SizedBox(width: 12),
+              itemBuilder: (context, index) {
+                final user = users[index];
+                final userId = user['user_id'];
+                return GestureDetector(
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => PaywallScreen(
+                          userId: widget.userId,
+                          campaignActive: true,
+                        ),
+                      ),
+                    );
+                  },
+                  child: FutureBuilder<String?>(
+                    future: _getExistingImageUrl(userId, 1, supportedExtensions),
+                    builder: (context, snapshot) {
+                      final imageUrl = snapshot.data;
+                      return Container(
+                        width: 110,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.all(6.0),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(14),
+                                child: AspectRatio(
+                                  aspectRatio: 9 / 16,
+                                  child: Stack(
+                                    fit: StackFit.expand,
+                                    children: [
+                                      // 実際の画像
+                                      imageUrl != null
+                                          ? Image.network(imageUrl, fit: BoxFit.cover)
+                                          : Container(
+                                              color: Colors.grey[300],
+                                              child: const Icon(Icons.image_not_supported, size: 40, color: Colors.grey),
+                                            ),
+                                      // モザイク効果
+                                      BackdropFilter(
+                                        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                                        child: Container(
+                                          color: Colors.black.withValues(alpha: 0.1),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              alignment: Alignment.center,
+                              child: Stack(
+                                children: [
+                                  // モザイクがかかったニックネーム
+                                  ImageFiltered(
+                                    imageFilter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
+                                    child: Text(
+                                      user['nickname'] ?? '???',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w900,
+                                        color: Colors.black,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                );
+              },
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -479,8 +659,11 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
                               child: AspectRatio(
                                 aspectRatio: 9 / 16,
                                 child: imageUrl != null
-                                    ? Image.network(imageUrl, fit: BoxFit.contain)
-                                    : const Icon(Icons.image_not_supported, size: 40, color: Colors.grey),
+                                    ? Image.network(imageUrl, fit: BoxFit.cover)
+                                    : Container(
+                                        color: Colors.grey[300],
+                                        child: const Icon(Icons.image_not_supported, size: 40, color: Colors.grey),
+                                      ),
                               ),
                             ),
                           ),

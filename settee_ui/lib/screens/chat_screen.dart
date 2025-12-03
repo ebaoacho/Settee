@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 import 'profile_browse_screen.dart';
 import 'discovery_screen.dart';
 import 'user_profile_screen.dart';
+import 'profile_preview_screen.dart';
 
 // ================== 共有定義（Match表示） ==================
 
@@ -218,24 +219,50 @@ class _AvatarCircle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final borderWidth = size * 0.03;
+    return SizedBox(
       width: size,
       height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: size * 0.03),
-        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4))],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: (url == null || url!.isNotEmpty == false)
-          ? _placeholder()
-          : Image.network(
-              url!,
-              width: size,
-              height: size,
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => _placeholder(),
+      child: Stack(
+        children: [
+          // 影
+          Container(
+            width: size,
+            height: size,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4))],
             ),
+          ),
+          // 画像本体（内側に配置）
+          Center(
+            child: Container(
+              width: size - borderWidth * 2,
+              height: size - borderWidth * 2,
+              clipBehavior: Clip.antiAlias,
+              decoration: const BoxDecoration(shape: BoxShape.circle),
+              child: (url == null || url!.isNotEmpty == false)
+                  ? _placeholder()
+                  : Image.network(
+                      url!,
+                      width: size - borderWidth * 2,
+                      height: size - borderWidth * 2,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => _placeholder(),
+                    ),
+            ),
+          ),
+          // 白い枠線（最前面）
+          Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: borderWidth),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -468,8 +495,10 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   List<dynamic> messages = [];
+  int _previousMessageCount = 0;
   final TextEditingController _controller = TextEditingController();
-  void _log(String msg) => debugPrint('[Chat] $msg'); 
+  final ScrollController _scrollController = ScrollController();
+  void _log(String msg) => debugPrint('[Chat] $msg');
   void _logAva(String msg) => debugPrint('[Avatar] $msg');
   MatchUser? _myInviteeUser;
   MatchUser? _partnerInviteeUser;
@@ -479,6 +508,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _selfIsOwner = true;
 
   final Map<String, String?> _avatarCache = {};
+  final Map<String, String> _nicknameCache = {};
 
   void _startPolling() {
     _timer?.cancel();
@@ -523,6 +553,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _stopPolling();
     _controller.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -787,6 +818,81 @@ Future<void> _loadDoubleContext() async {
     setState(() => _avatarCache[userId] = url);
   }
 
+  Future<void> _ensureNicknameLoaded(String userId) async {
+    if (userId.contains('{') || userId.contains(' ')) {
+      return;
+    }
+    if (_nicknameCache.containsKey(userId)) {
+      return;
+    }
+    final nickname = await _fetchNickname(userId);
+    if (!mounted) return;
+    setState(() => _nicknameCache[userId] = nickname);
+  }
+
+  Future<String> _fetchNickname(String userId) async {
+    try {
+      final uri = Uri.parse('https://settee.jp/get-profile/$userId/');
+      final res = await http.get(uri).timeout(const Duration(seconds: 5));
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+        return data['nickname'] ?? 'ユーザー';
+      }
+    } catch (e) {
+      debugPrint('[Nickname] fetch error for $userId: $e');
+    }
+    return 'ユーザー';
+  }
+
+  Future<Map<String, dynamic>?> _fetchUserProfile(String userId) async {
+    try {
+      final uri = Uri.parse('https://settee.jp/get-profile/$userId/');
+      final res = await http.get(uri).timeout(const Duration(seconds: 5));
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      debugPrint('[Profile] fetch error for $userId: $e');
+    }
+    return null;
+  }
+
+  Future<void> _showUserProfile(String userId) async {
+    final profile = await _fetchUserProfile(userId);
+    if (profile == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('プロフィールの取得に失敗しました')),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+
+    // ProfilePreviewScreenに必要なデータを準備
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => ProfilePreviewScreen(
+          userId: userId,
+          nickname: profile['nickname'] ?? 'ユーザー',
+          birthDateText: profile['birth_date'] ?? '未設定',
+          gender: profile['gender'] ?? '未設定',
+          mbti: profile['mbti'] ?? '未設定',
+          drinking: profile['drinking'] ?? '未設定',
+          zodiac: profile['zodiac'] ?? '未設定',
+          university: profile['university'] ?? '未設定',
+          smoking: profile['smoking'] ?? '未設定',
+          occupation: profile['occupation'] ?? '未設定',
+          height: profile['height'] ?? '未設定',
+          seeking: profile['seeking'] ?? '未設定',
+          preference: profile['preference'] ?? '未設定',
+          selectedAreas: (profile['selected_area'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
+          availableDates: (profile['available_dates'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
+        ),
+      ),
+    );
+  }
+
   // シングル/ダブルに応じて事前に参加者をプリフェッチ
   Future<void> _prefetchAvatars() async {
     // 自分 & 1:1の相手
@@ -844,7 +950,18 @@ Future<void> _loadDoubleContext() async {
       final sid = '${m['sender']}';
       if (sid.isNotEmpty) ids.add(sid);
     }
-    await Future.wait(ids.map(_ensureAvatarLoaded));
+    await Future.wait([
+      ...ids.map(_ensureAvatarLoaded),
+      ...ids.map(_ensureNicknameLoaded),
+    ]);
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+      }
+    });
   }
 
 Future<void> fetchMessages() async {
@@ -857,8 +974,15 @@ Future<void> fetchMessages() async {
       if (res.statusCode == 200) {
         final list = json.decode(utf8.decode(res.bodyBytes)) as List<dynamic>;
         _log('fetch(double) count=${list.length}');
-        setState(() => messages = list);
+        final hasNewMessages = list.length > _previousMessageCount;
+        setState(() {
+          messages = list;
+          _previousMessageCount = list.length;
+        });
         _warmAvatarCacheFromMessages(list);
+        if (hasNewMessages) {
+          _scrollToBottom();
+        }
       } else {
         _log('fetch(double) body=${res.body}');
       }
@@ -870,8 +994,15 @@ Future<void> fetchMessages() async {
       if (res.statusCode == 200) {
         final list = json.decode(utf8.decode(res.bodyBytes)) as List<dynamic>;
         _log('fetch(single) count=${list.length}');
-        setState(() => messages = list);
+        final hasNewMessages = list.length > _previousMessageCount;
+        setState(() {
+          messages = list;
+          _previousMessageCount = list.length;
+        });
         _warmAvatarCacheFromMessages(list);
+        if (hasNewMessages) {
+          _scrollToBottom();
+        }
       } else {
         _log('fetch(single) body=${res.body}');
       }
@@ -882,6 +1013,9 @@ Future<void> fetchMessages() async {
 }
 
   Future<void> sendMessage(String text) async {
+    // キーボードを閉じる
+    FocusScope.of(context).unfocus();
+
     try {
       if (widget.headerMode == MatchMode.double && widget.conversationId != null) {
         // Double: /conversations/<id>/messages/send/
@@ -989,6 +1123,7 @@ Future<void> fetchMessages() async {
           // スクロール領域：ヘッダー（幅Max/比率厳守）+ メッセージ（リスト）
           Expanded(
             child: CustomScrollView(
+              controller: _scrollController,
               slivers: [
                 // ヘッダー：横幅いっぱい・高さ=幅/比率（→ 横余白ゼロ）
                 SliverToBoxAdapter(
@@ -1029,15 +1164,18 @@ Future<void> fetchMessages() async {
                       final text = (message['text'] ?? '').toString();
 
                       // 小さめの丸アイコン（左側に表示）
-                      Widget smallAvatar(String? url) => Container(
-                        width: 26, height: 26,
-                        margin: const EdgeInsets.only(right: 6), // バブルとの間隔
-                        decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF444444)),
-                        clipBehavior: Clip.antiAlias,
-                        child: (url == null || url.isEmpty)
-                            ? const Icon(Icons.person, color: Colors.white70, size: 16)
-                            : Image.network(url, fit: BoxFit.cover,
-                                errorBuilder: (_, __, ___) => const Icon(Icons.person, color: Colors.white70, size: 16)),
+                      Widget smallAvatar(String? url, String userId) => GestureDetector(
+                        onTap: () => _showUserProfile(userId),
+                        child: Container(
+                          width: 26, height: 26,
+                          margin: const EdgeInsets.only(right: 6), // バブルとの間隔
+                          decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF444444)),
+                          clipBehavior: Clip.antiAlias,
+                          child: (url == null || url.isEmpty)
+                              ? const Icon(Icons.person, color: Colors.white70, size: 16)
+                              : Image.network(url, fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => const Icon(Icons.person, color: Colors.white70, size: 16)),
+                        ),
                       );
 
                       // バブル（最大幅=画面の50% → 画面中央で折り返しやすい）
@@ -1061,13 +1199,36 @@ Future<void> fetchMessages() async {
                         ),
                       );
 
+                      // ニックネーム
+                      final senderNickname = _nicknameCache[senderId] ?? 'ユーザー';
+
+                      // バブル＋ニックネームをまとめたColumn
+                      final bubbleWithName = Column(
+                        crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                        children: [
+                          if (!isMe)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 4, bottom: 2),
+                              child: Text(
+                                senderNickname,
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          bubble,
+                        ],
+                      );
+
                       // 行：左にアイコン→バブル（自分の発言はバブルのみ、右寄せ）
                       return Row(
                         mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
                         crossAxisAlignment: CrossAxisAlignment.end, // ← バブルとアイコンの下辺を揃える
                         children: [
-                          if (!isMe) smallAvatar(_avatarCache[senderId]),
-                          bubble,
+                          if (!isMe) smallAvatar(_avatarCache[senderId], senderId),
+                          bubbleWithName,
                         ],
                       );
                     },

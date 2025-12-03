@@ -5,6 +5,7 @@ import 'profile_browse_screen.dart';
 import 'user_profile_screen.dart';
 import 'discovery_screen.dart';
 import 'matched_users_screen.dart';
+import 'point_exchange_screen.dart'; // ★ 追加：ポイント画面
 
 class AreaSelectionScreen extends StatefulWidget {
   final String userId;
@@ -45,7 +46,7 @@ class _AreaSelectionScreenState extends State<AreaSelectionScreen> {
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
       setState(() {
-      selectedAreas = List<String>.from(data['selected_area'] ?? []);
+        selectedAreas = List<String>.from(data['selected_area'] ?? []);
       });
     }
   }
@@ -151,12 +152,16 @@ class _AreaSelectionScreenState extends State<AreaSelectionScreen> {
                 ),
               ),
 
-              // チェックマーク（右端内側）
+              // チェックマーク（右端・垂直中央）
               if (isSelected)
-                Positioned(
-                  right: 12,
-                  top: 12,
-                  child: Icon(Icons.check_circle, color: Colors.white, size: checkSize),
+                Positioned.fill(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: Icon(Icons.check_circle, color: Colors.white, size: checkSize),
+                    ),
+                  ),
                 ),
 
               // インク反応（アクセシビリティ的に十分なタップ領域）
@@ -184,77 +189,131 @@ class _AreaSelectionScreenState extends State<AreaSelectionScreen> {
     );
   }
 
+  // スライド遷移（左右アニメ）
+  Route<T> _slideRoute<T>(Widget page, {AxisDirection direction = AxisDirection.left}) {
+    Offset begin;
+    switch (direction) {
+      case AxisDirection.left:  begin = const Offset(1.0, 0.0);  break; // → から入る
+      case AxisDirection.right: begin = const Offset(-1.0, 0.0); break; // ← から入る
+      case AxisDirection.up:    begin = const Offset(0.0, 1.0);  break;
+      case AxisDirection.down:  begin = const Offset(0.0, -1.0); break;
+    }
+    return PageRouteBuilder<T>(
+      pageBuilder: (_, __, ___) => page,
+      transitionDuration: const Duration(milliseconds: 280),
+      reverseTransitionDuration: const Duration(milliseconds: 220),
+      transitionsBuilder: (_, anim, __, child) {
+        final tween = Tween(begin: begin, end: Offset.zero)
+            .chain(CurveTween(curve: Curves.easeOutCubic));
+        return SlideTransition(position: anim.drive(tween), child: child);
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final headlineSize = _rs(context, 14, min: 12, max: 16);
     final ctaHeight    = (_rs(context, 50, min: 44, max: 56)).toDouble();
 
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topRight,
-            end: Alignment.bottomLeft,
-            colors: [Colors.white, Color(0xFFEEEEEE), Colors.black],
-            stops: [0.0, 0.7, 1.0],
+      body: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onHorizontalDragEnd: (details) {
+          const threshold = 150.0;
+          final v = details.primaryVelocity ?? 0.0;
+
+          if (v > threshold) {
+            // 左→右：ポイント画面へ（現状のままでOK）
+            Navigator.of(context).push(
+              _slideRoute(
+                PointExchangeScreen(userId: widget.userId),
+                direction: AxisDirection.right,
+              ),
+            );
+          } else if (v < -threshold) {
+            // 右→左：常にメイン画面へ（←ここを変更）
+            Navigator.of(context).pushAndRemoveUntil(
+              _slideRoute(
+                ProfileBrowseScreen(currentUserId: widget.userId),
+                direction: AxisDirection.left, // 右からスライドイン
+              ),
+              (route) => false, // スタックを全破棄して強制的にメインへ
+            );
+          }
+        },
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topRight,
+              end: Alignment.bottomLeft,
+              colors: [Colors.white, Color(0xFFEEEEEE), Colors.black],
+              stops: [0.0, 0.7, 1.0],
+            ),
           ),
-        ),
-        child: SafeArea(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              return SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                  child: Center(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const SizedBox(height: 16),
-                          Text(
-                            'あなたがマッチしたいエリアを選ぼう。\n新たな出会いを',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.black, fontSize: headlineSize),
-                          ),
-                          const SizedBox(height: 36),
-
-                          // リストは shrinkWrap で外側スクロールに委ねる
-                          ListView.separated(
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            itemCount: areaList.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 4),
-                            itemBuilder: (_, i) => _buildAreaTile(areaList[i]),
-                          ),
-
-                          // 決定ボタン（中央寄せブロックの一部）
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-                            child: SizedBox(
-                              width: double.infinity,
-                              height: ctaHeight,
-                              child: ElevatedButton(
-                                onPressed: _submitSelectedAreas,
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.white,
-                                  foregroundColor: Colors.black,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                                child: const Text('決定する'),
+          child: SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const SizedBox(height: 16),
+                            Text(
+                              'あなたがマッチしたいエリアを選ぼう。\n新たな出会いを',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Colors.black,
+                                fontSize: headlineSize,
+                                fontWeight: FontWeight.bold,
                               ),
                             ),
-                          ),
-                        ],
+                            const SizedBox(height: 36),
+
+                            // リストは shrinkWrap で外側スクロールに委ねる
+                            ListView.separated(
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
+                              itemCount: areaList.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 4),
+                              itemBuilder: (_, i) => _buildAreaTile(areaList[i]),
+                            ),
+
+                            // 決定ボタン（中央寄せブロックの一部）
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                              child: SizedBox(
+                                width: double.infinity,
+                                height: ctaHeight,
+                                child: ElevatedButton(
+                                  onPressed: _submitSelectedAreas,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.white,
+                                    foregroundColor: Colors.black,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  child: const Text(
+                                    '決定する',
+                                    style: TextStyle(fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
         ),
       ),
@@ -267,7 +326,7 @@ class _AreaSelectionScreenState extends State<AreaSelectionScreen> {
     transitionDuration: Duration.zero,
     reverseTransitionDuration: Duration.zero,
     transitionsBuilder: (_, __, ___, child) => child,
-    maintainState: false, // 前画面を保持しない（→ タイマー等は dispose される）
+    maintainState: false,
     opaque: true,
   );
 

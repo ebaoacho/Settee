@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'available_tickets_screen.dart';
+import 'area_selection_screen.dart';
 import 'dart:ui' as ui;
 
 /// --------------------------------------------
@@ -246,6 +247,26 @@ class _PointExchangeScreenState extends State<PointExchangeScreen> {
     setState(() => _points -= cost);
   }
 
+  Route<T> _slideRoute<T>(Widget page, {AxisDirection direction = AxisDirection.left}) {
+    Offset begin;
+    switch (direction) {
+      case AxisDirection.left:  begin = const Offset(1.0, 0.0);  break; // 右から入る
+      case AxisDirection.right: begin = const Offset(-1.0, 0.0); break; // 左から入る
+      case AxisDirection.up:    begin = const Offset(0.0, 1.0);  break;
+      case AxisDirection.down:  begin = const Offset(0.0, -1.0); break;
+    }
+    return PageRouteBuilder<T>(
+      pageBuilder: (_, __, ___) => page,
+      transitionDuration: const Duration(milliseconds: 280),
+      reverseTransitionDuration: const Duration(milliseconds: 220),
+      transitionsBuilder: (_, anim, __, child) {
+        final tween = Tween(begin: begin, end: Offset.zero)
+            .chain(CurveTween(curve: Curves.easeOutCubic));
+        return SlideTransition(position: anim.drive(tween), child: child);
+      },
+    );
+  }
+
   void _showSetteePointInfoDialog() {
     showDialog(
       context: context,
@@ -363,6 +384,7 @@ class _PointExchangeScreenState extends State<PointExchangeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // 背景グラデーション
     final bg = const LinearGradient(
       begin: Alignment.topCenter,
       end: Alignment.bottomCenter,
@@ -372,141 +394,163 @@ class _PointExchangeScreenState extends State<PointExchangeScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFF0A0A0A),
-      body: SafeArea(
-        child: Container(
-          decoration: BoxDecoration(gradient: bg),
-          child: Column(
-            children: [
-              // --- ヘッダ ---
-              Padding(
-                padding: const EdgeInsets.fromLTRB(8, 4, 8, 16),
-                child: Row(
-                  children: [
-                    IconButton(
-                      padding: const EdgeInsets.all(4),
-                      onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.chevron_left, size: 28),
-                    ),
-                    const SizedBox(width: 4),
-                    const Text(
-                      'Settee Point交換',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const Spacer(),
-                    _CapsuleButton(
-                      label: 'Settee Pointとは',
-                      onTap: _showSetteePointInfoDialog,
-                    ),
-                  ],
-                ),
+      body: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onHorizontalDragEnd: (details) {
+          // 右→左（左へフリック）でエリア選択へ遷移
+          const threshold = 150.0; // 誤作動防止の速度しきい値（必要に応じ調整）
+          final v = details.primaryVelocity ?? 0.0;
+          if (v < -threshold) {
+            Navigator.of(context).push(
+              _slideRoute(
+                AreaSelectionScreen(userId: widget.userId),
+                direction: AxisDirection.left, // 右からスライドイン
               ),
-
-              // --- 保有ポイント ---
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Row(
-                  children: [
-                    const Text(
-                      '保有 Point',
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 18,
+            );
+          }
+        },
+        child: SafeArea(
+          child: Container(
+            decoration: BoxDecoration(gradient: bg),
+            child: Column(
+              children: [
+                // --- ヘッダ ---
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 4, 8, 16),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        padding: const EdgeInsets.all(4),
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.chevron_left, size: 28),
                       ),
-                    ),
-                    const Spacer(),
-                    _CapsuleButton(
-                      label: '利用可能なTicket',
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => AvailableTicketsScreen(userId: widget.userId),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    '$_points p',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 36,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 1.0,
-                    ),
+                      const SizedBox(width: 4),
+                      const Text(
+                        'Settee Point交換',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.black,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
 
-              // --- チケット一覧 ---
-              Expanded(
-                child: Container(
-                  decoration: const BoxDecoration(color: Colors.transparent),
-                  child: ListView.separated(
-                    physics: const BouncingScrollPhysics(),
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                    itemBuilder: (context, index) {
-                      final t = _tickets[index];
-                      final canExchange = _points >= t.points;
-
-                      return _TicketTile(
-                        ticket: t,
-                        canExchange: canExchange,
-                        onTapExchange: () async {
-                          final result = await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => TicketDetailScreen(
-                                ticket: t,
-                                userId: widget.userId,
-                                currentPoints: _points,
+                // --- 保有ポイント ---
+                Padding(
+                  padding: const EdgeInsets.only(right: 20),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(56, 4, 20, 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              '保有 Point',
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 18,
                               ),
                             ),
-                          );
-
-                          if (!mounted) return;
-
-                          // --- 改善ポイント ---
-                          // 1) Map 返却 (exchanged & points) に対応 → サーバ残高で同期
-                          // 2) 従来の bool 返却(true)にも対応 → クライアント側で減算
-                          if (result is Map && result['exchanged'] == true) {
-                            final int? serverPoints =
-                                result['points'] is int ? result['points'] as int : null;
-
-                            if (serverPoints != null) {
-                              setState(() => _points = serverPoints);
-                            } else {
-                              _consumePoints(t.points);
-                            }
-
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('${t.title} を交換しました')),
-                            );
-                          } else if (result == true) {
-                            _consumePoints(t.points);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('${t.title} を交換しました')),
-                            );
-                          }
-                        },
-                      );
-                    },
-                    separatorBuilder: (_, __) => const SizedBox(height: 14),
-                    itemCount: _tickets.length,
+                            const SizedBox(height: 4),
+                            Text(
+                              '$_points p',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 36,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 1.0,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Spacer(),
+                      // ← ここを縦並びの Column に
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end, // 右端に揃える
+                        children: [
+                          _CapsuleButton(
+                            label: '利用可能なTicket',
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => AvailableTicketsScreen(userId: widget.userId),
+                                ),
+                              );
+                            },
+                          ),
+                          const SizedBox(height: 8),
+                          _CapsuleButton(
+                            label: 'Settee Pointとは',
+                            onTap: _showSetteePointInfoDialog,
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
-              ),
-            ],
+                // --- チケット一覧 ---
+                Expanded(
+                  child: Container(
+                    decoration: const BoxDecoration(color: Colors.transparent),
+                    child: ListView.separated(
+                      physics: const BouncingScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                      itemBuilder: (context, index) {
+                        final t = _tickets[index];
+                        final canExchange = _points >= t.points;
+
+                        return _TicketTile(
+                          ticket: t,
+                          canExchange: canExchange,
+                          onTapExchange: () async {
+                            final result = await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => TicketDetailScreen(
+                                  ticket: t,
+                                  userId: widget.userId,
+                                  currentPoints: _points,
+                                ),
+                              ),
+                            );
+
+                            if (!mounted) return;
+
+                            // Map返却（サーバ残高）・bool返却（クライアント減算）どちらも対応
+                            if (result is Map && result['exchanged'] == true) {
+                              final int? serverPoints =
+                                  result['points'] is int ? result['points'] as int : null;
+                              if (serverPoints != null) {
+                                setState(() => _points = serverPoints);
+                              } else {
+                                _consumePoints(t.points);
+                              }
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('${t.title} を交換しました')),
+                              );
+                            } else if (result == true) {
+                              _consumePoints(t.points);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('${t.title} を交換しました')),
+                              );
+                            }
+                          },
+                        );
+                      },
+                      separatorBuilder: (_, __) => const SizedBox(height: 14),
+                      itemCount: _tickets.length,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -963,7 +1007,7 @@ class _CapsuleButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: const Color(0xFFBFBFBF),
+      color: Colors.white,
       borderRadius: BorderRadius.circular(22),
       child: InkWell(
         onTap: onTap,

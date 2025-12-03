@@ -67,10 +67,18 @@ class _FinalSettingScreenState extends State<FinalSettingScreen> {
             ),
             const Spacer(),
             Center(
-              child: Image.asset(
-                'assets/check_star.png',
-                width: 520,
-                height: 520,
+              child: Container(
+                width: 200,
+                height: 200,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.green.withValues(alpha: 0.2),
+                ),
+                child: const Icon(
+                  Icons.check_circle,
+                  color: Colors.white,
+                  size: 180,
+                ),
               ),
             ),
             const Spacer(),

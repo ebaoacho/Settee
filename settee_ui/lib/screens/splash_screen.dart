@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:video_player/video_player.dart';
 import 'welcome_screen.dart';
 import 'profile_browse_screen.dart';
 import 'admin_screen.dart';
@@ -19,12 +20,50 @@ class SplashScreen extends StatefulWidget {
 }
 
 class _SplashScreenState extends State<SplashScreen> {
+  late final VideoPlayerController _videoController;
+  late final Future<void> _videoInitFuture;
+  late final VoidCallback _videoListener;
+  Widget? _nextScreen;
+  bool _videoCompleted = false;
+  bool _didNavigate = false;
+
   @override
   void initState() {
     super.initState();
+    _initializeVideo();
     // 初回フレーム描画後に遷移ロジック開始（Inherited参照の競合を避ける）
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkLoginStatus();
+    });
+  }
+
+  void _initializeVideo() {
+    _videoController = VideoPlayerController.asset('assets/logo.mp4');
+    _videoListener = () {
+      if (_videoCompleted) return;
+      final value = _videoController.value;
+      final duration = value.duration;
+      if (value.isInitialized &&
+          duration != null &&
+          value.position >= duration &&
+          !value.isPlaying) {
+        _markVideoComplete();
+      }
+    };
+    _videoController.addListener(_videoListener);
+
+    _videoInitFuture = _videoController.initialize().then((_) async {
+      try {
+        await _videoController.setLooping(false);
+        await _videoController.play();
+        if (mounted) {
+          setState(() {});
+        }
+      } catch (_) {
+        _markVideoComplete();
+      }
+    }).catchError((_) {
+      _markVideoComplete();
     });
   }
 
@@ -56,15 +95,15 @@ class _SplashScreenState extends State<SplashScreen> {
         next = const WelcomeScreen();
       }
 
-      _goNext(next);
+      _setNextScreen(next);
     } on TimeoutException {
       // Prefs 取得が遅い環境でも起動を止めない
       if (!mounted) return;
-      _goNext(const WelcomeScreen());
+      _setNextScreen(const WelcomeScreen());
     } catch (_) {
       // 何か起きても安全側へ
       if (!mounted) return;
-      _goNext(const WelcomeScreen());
+      _setNextScreen(const WelcomeScreen());
     }
   }
 
@@ -89,15 +128,62 @@ class _SplashScreenState extends State<SplashScreen> {
     });
   }
 
+  void _setNextScreen(Widget next) {
+    _nextScreen = next;
+    _maybeNavigate();
+  }
+
+  void _maybeNavigate() {
+    if (_didNavigate || _nextScreen == null || !_videoCompleted) return;
+    _didNavigate = true;
+    _goNext(_nextScreen!);
+  }
+
+  void _markVideoComplete() {
+    if (_videoCompleted) return;
+    _videoCompleted = true;
+    _maybeNavigate();
+  }
+
+  @override
+  void dispose() {
+    _videoController.removeListener(_videoListener);
+    _videoController.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
+    final screenWidth = MediaQuery.of(context).size.width;
+    final videoWidth = screenWidth * 0.6; // 画面幅の60%に設定
+
+    return Scaffold(
       backgroundColor: Colors.black,
       body: Center(
-        child: Image(
-          image: AssetImage('assets/logo.png'),
-          width: 200,
-          height: 200,
+        child: FutureBuilder<void>(
+          future: _videoInitFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.done &&
+                _videoController.value.isInitialized) {
+              return SizedBox(
+                width: videoWidth,
+                child: AspectRatio(
+                  aspectRatio: _videoController.value.aspectRatio,
+                  child: VideoPlayer(_videoController),
+                ),
+              );
+            }
+            if (snapshot.hasError) {
+              return Image.asset(
+                'assets/logo.png',
+                width: 200,
+                height: 200,
+              );
+            }
+            return const CircularProgressIndicator(
+              color: Colors.white,
+            );
+          },
         ),
       ),
     );

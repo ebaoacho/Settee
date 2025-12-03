@@ -42,8 +42,131 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding as asy_padding, ec, rsa
 from cryptography.hazmat.primitives.asymmetric.utils import Prehashed
 from cryptography.hazmat.backends import default_backend
+import pytz
 
 logger = logging.getLogger(__name__)
+
+# ===== ログインボーナス関連のヘルパー関数 =====
+
+# 日本時間のタイムゾーン
+JST = pytz.timezone('Asia/Tokyo')
+
+def get_jst_date():
+    """現在の日本時間の日付を取得"""
+    return timezone.now().astimezone(JST).date()
+
+def check_and_grant_login_bonus(user: UserProfile) -> dict:
+    """
+    ログインボーナスの判定と付与
+
+    Returns:
+        dict: {
+            'daily_bonus': int,  # 今回付与されたデイリーボーナス
+            'streak_bonus': int,  # 今回付与された連続ログインボーナス
+            'consecutive_days': int,  # 現在の連続ログイン日数
+            'total_granted': int,  # 合計付与ポイント
+            'messages': list[str],  # ユーザーへのメッセージ
+        }
+    """
+    from datetime import timedelta as td
+
+    today = get_jst_date()
+    result = {
+        'daily_bonus': 0,
+        'streak_bonus': 0,
+        'consecutive_days': user.consecutive_login_days,
+        'total_granted': 0,
+        'messages': [],
+    }
+
+    # 月初リセット処理
+    if user.last_streak_bonus_reset is None or user.last_streak_bonus_reset.month != today.month:
+        user.monthly_streak_bonus_count = 0
+        user.last_streak_bonus_reset = today
+
+    # 初回ログインまたは前回と異なる日付
+    if user.last_login_date is None or user.last_login_date < today:
+        # デイリーボーナス付与（1ポイント）
+        result['daily_bonus'] = 1
+        user.settee_points = (user.settee_points or 0) + 1
+        result['messages'].append('ログインボーナス +1pt')
+
+        # 連続ログイン判定
+        if user.last_login_date is None:
+            # 初回ログイン
+            user.consecutive_login_days = 1
+        elif user.last_login_date == today - td(days=1):
+            # 前日にログインしていた → 連続
+            user.consecutive_login_days += 1
+        else:
+            # 1日以上空いた → リセット
+            user.consecutive_login_days = 1
+            result['messages'].append('連続ログインが途切れました')
+
+        result['consecutive_days'] = user.consecutive_login_days
+
+        # 7日連続達成で連続ログインボーナス
+        if user.consecutive_login_days >= 7:
+            # 月間上限チェック（月50pt = 10回まで）
+            if user.monthly_streak_bonus_count < 10:
+                result['streak_bonus'] = 5
+                user.settee_points += 5
+                user.monthly_streak_bonus_count += 1
+                user.consecutive_login_days = 0  # 連続日数リセット
+                result['consecutive_days'] = 0
+                result['messages'].append('7日連続ログインボーナス +5pt!')
+            else:
+                result['messages'].append('今月の連続ログインボーナスは上限に達しました')
+                user.consecutive_login_days = 0
+                result['consecutive_days'] = 0
+
+        # 最終ログイン日を更新
+        user.last_login_date = today
+        user.save()
+
+        result['total_granted'] = result['daily_bonus'] + result['streak_bonus']
+    else:
+        # 同日に再ログイン → ボーナスなし
+        result['messages'].append('本日のログインボーナスは受け取り済みです')
+
+    return result
+
+def check_and_grant_match_bonus(user: UserProfile) -> dict:
+    """
+    マッチングボーナスの判定と付与（マッチング時に呼び出す）
+
+    Returns:
+        dict: {
+            'bonus': int,  # 付与されたポイント
+            'count': int,  # 今月のマッチングボーナス取得回数
+            'message': str,
+        }
+    """
+    today = get_jst_date()
+
+    # 月初リセット処理
+    if user.last_match_bonus_reset is None or user.last_match_bonus_reset.month != today.month:
+        user.monthly_match_bonus_count = 0
+        user.last_match_bonus_reset = today
+
+    # 月間上限チェック（月30pt = 10回まで）
+    if user.monthly_match_bonus_count < 10:
+        user.settee_points = (user.settee_points or 0) + 3
+        user.monthly_match_bonus_count += 1
+        user.save()
+        return {
+            'bonus': 3,
+            'count': user.monthly_match_bonus_count,
+            'message': f'マッチングボーナス +3pt! (今月{user.monthly_match_bonus_count}/10回)',
+        }
+    else:
+        return {
+            'bonus': 0,
+            'count': user.monthly_match_bonus_count,
+            'message': '今月のマッチングボーナスは上限に達しました',
+        }
+
+# ===== ログインボーナス関連のヘルパー関数 ここまで =====
 
 @api_view(['POST'])
 def register_user(request):
@@ -90,16 +213,28 @@ def login_user(request):
 
     if not check_password(raw_password, user.password):
         return Response({'detail': '認証に失敗しました'}, status=400)
-    
+
     if user.is_banned:
         return Response({'detail': 'このアカウントは停止されています'}, status=403)
+
+    # ログインボーナス処理
+    bonus_result = check_and_grant_login_bonus(user)
 
     return Response({
         'id': user.id,
         'email': user.email,
         'user_id': user.user_id,
         'nickname': user.nickname,
-        'message': 'ログインに成功しました'
+        'message': 'ログインに成功しました',
+        # ログインボーナス情報を追加
+        'login_bonus': {
+            'daily_bonus': bonus_result['daily_bonus'],
+            'streak_bonus': bonus_result['streak_bonus'],
+            'consecutive_days': bonus_result['consecutive_days'],
+            'total_granted': bonus_result['total_granted'],
+            'messages': bonus_result['messages'],
+            'current_points': user.settee_points,
+        }
     }, status=200)
 
 login_user.__name__ = 'login_user'
@@ -740,12 +875,22 @@ def match(request):
         return Response({'error': '既にマッチしています'}, status=400)
     except Match.DoesNotExist:
         pass  # マッチが存在しない場合は続行
-    
+
     match = Match.create_match(me, other)
+
+    # マッチング成立時に両ユーザーにマッチングボーナス付与
+    bonus_me = check_and_grant_match_bonus(me)
+    check_and_grant_match_bonus(other)  # 相手にもボーナス付与
+
     return Response({
         'message': 'マッチングしました',
         'match_id': match.id,
-        'matched_at': match.matched_at
+        'matched_at': match.matched_at,
+        # マッチングボーナス情報を追加
+        'match_bonus': {
+            'bonus': bonus_me['bonus'],
+            'message': bonus_me['message'],
+        }
     }, status=201)
 
 @api_view(['PATCH'])
@@ -1769,16 +1914,12 @@ def has_settee_plus_active(user: UserProfile) -> bool:
 def liked_users(request, current_user_id: str):
     """
     current_user_id を受け取り、そのユーザーを 'receiver' とする LikeAction の sender を列挙。
-    Settee+がアクティブでなければ 403。
+    全てのユーザーがアクセス可能（フロントエンドでFREEユーザーにはモザイク表示）。
     """
     try:
         me = UserProfile.objects.get(user_id=current_user_id)
     except UserProfile.DoesNotExist:
         return Response({'error': 'ユーザーが存在しません'}, status=404)
-
-    # サーバ側でも Settee+ を必ず検査（クライアントのみの検査は不可）
-    if not has_settee_plus_active(me):
-        return Response({'error': 'この機能には Settee+ が必要です'}, status=403)
 
     # 自分を Like した sender を新しい順に最大100件
     likes_qs = (LikeAction.objects
